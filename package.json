@@ -9,11 +9,11 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^3.0.0-alpha.20",
-    "music-metadata": "^7.13.0",
+    "music-metadata": "^11.12.3",
     "node-id3": "^0.2.6"
   },
   "devDependencies": {
-    "electron": "^30.0.0",
+    "electron": "^39.8.5",
     "electron-packager": "^17.1.2"
   },
   "keywords": [
