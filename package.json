@@ -1,0 +1,28 @@
+{
+  "name": "your-own-personal-dj",
+  "version": "1.0.0",
+  "description": "A local DJ app that uses local AI to play music matching your mood.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-packager . \"Your Own Personal DJ\" --platform=win32 --arch=x64 --out=dist --overwrite"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.0.0-alpha.20",
+    "music-metadata": "^7.13.0",
+    "node-id3": "^0.2.6"
+  },
+  "devDependencies": {
+    "electron": "^30.0.0",
+    "electron-packager": "^17.1.2"
+  },
+  "keywords": [
+    "music",
+    "dj",
+    "gemma",
+    "local-ai",
+    "electron"
+  ],
+  "author": "Your Own Personal DJ Team",
+  "license": "MIT"
+}
