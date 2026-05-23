@@ -8,12 +8,12 @@
     "build": "electron-packager . \"Your Own Personal DJ\" --platform=win32 --arch=x64 --out=dist --overwrite"
   },
   "dependencies": {
-    "@huggingface/transformers": "^3.0.0-alpha.20",
-    "music-metadata": "^7.13.0",
-    "node-id3": "^0.2.6"
+    "@huggingface/transformers": "^4.2.0",
+    "music-metadata": "^11.12.3",
+    "node-id3": "^0.2.9"
   },
   "devDependencies": {
-    "electron": "^30.0.0",
+    "electron": "^42.2.0",
     "electron-packager": "^17.1.2"
   },
   "keywords": [
@@ -23,6 +23,6 @@
     "local-ai",
     "electron"
   ],
-  "author": "Your Own Personal DJ Team",
+  "author": "Shane W Watson",
   "license": "MIT"
 }

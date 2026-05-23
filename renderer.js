@@ -424,9 +424,14 @@ btnStartScan.addEventListener('click', () => {
   scanPercentage.innerText = '0%';
   scanStatusText.innerText = 'Reading directories...';
   
+  // Track scanned paths to clean up dead links in database
+  state.scannedPaths = new Set();
+  
   logConsole('Starting asynchronous library scan...', 'info');
   window.api.startScan(state.folders);
 });
+
+let libraryRenderTimeout = null;
 
 window.api.onScanProgress((data) => {
   const { current, total, track } = data;
@@ -435,6 +440,11 @@ window.api.onScanProgress((data) => {
   scanProgressBar.style.width = `${percent}%`;
   scanPercentage.innerText = `${percent}%`;
   scanStatusText.innerText = `Scanned ${current}/${total} files`;
+
+  // Record scanned path
+  if (state.scannedPaths) {
+    state.scannedPaths.add(track.path);
+  }
 
   const existingIdx = state.library.findIndex(t => t.path === track.path);
   if (existingIdx !== -1) {
@@ -449,7 +459,12 @@ window.api.onScanProgress((data) => {
     state.library.push(track);
   }
 
-  renderLibraryTable();
+  if (!libraryRenderTimeout) {
+    libraryRenderTimeout = setTimeout(() => {
+      renderLibraryTable();
+      libraryRenderTimeout = null;
+    }, 300);
+  }
 });
 
 window.api.onScanComplete((data) => {
@@ -457,6 +472,17 @@ window.api.onScanComplete((data) => {
   checkScanButtonState();
   scanProgressContainer.classList.add('hidden');
   
+  // Clean up dead/deleted paths that were not found in the scan
+  if (state.scannedPaths) {
+    state.library = state.library.filter(t => state.scannedPaths.has(t.path));
+    delete state.scannedPaths;
+  }
+  
+  if (libraryRenderTimeout) {
+    clearTimeout(libraryRenderTimeout);
+    libraryRenderTimeout = null;
+  }
+  renderLibraryTable();
   saveLibraryState();
   updateAnalysisProgress();
   
@@ -814,15 +840,17 @@ function areGenresCompatible(genre1, genre2) {
   
   if (genre1 === 'unknown' || genre2 === 'unknown' || genre1 === genre2) return true;
   
-  const metalGenres = ['metal', 'heavy metal', 'death metal', 'thrash metal', 'hardcore'];
-  const classicalGenres = ['classical', 'orchestral', 'opera', 'ambient', 'new age'];
+  const mildGenres = ['ambient', 'classical', 'orchestral', 'opera', 'lofi', 'acoustic', 'study', 'folk', 'downtempo', 'jazz', 'new age', 'meditative', 'chillout'];
+  const heavyGenres = ['metal', 'heavy metal', 'death metal', 'thrash metal', 'hardcore', 'punk', 'grunge', 'hard rock', 'industrial', 'thrash', 'screamo'];
   
-  const isMetal1 = metalGenres.some(g => genre1.includes(g));
-  const isMetal2 = metalGenres.some(g => genre2.includes(g));
-  const isClassical1 = classicalGenres.some(g => genre1.includes(g));
-  const isClassical2 = classicalGenres.some(g => genre2.includes(g));
+  const isMild1 = mildGenres.some(g => genre1.includes(g));
+  const isMild2 = mildGenres.some(g => genre2.includes(g));
   
-  if ((isMetal1 && isClassical2) || (isClassical1 && isMetal2)) {
+  const isHeavy1 = heavyGenres.some(g => genre1.includes(g));
+  const isHeavy2 = heavyGenres.some(g => genre2.includes(g));
+  
+  // Strictly prevent direct Mild <-> Heavy transitions
+  if ((isMild1 && isHeavy2) || (isHeavy1 && isMild2)) {
     return false;
   }
   
@@ -843,14 +871,28 @@ async function fillQueue() {
 }
 
 async function getNextDJTrack() {
+  // Layer 1: Strict - respect both artist cooldown and 1-hour song cooldown, and genre compatibility
   let candidates = state.library.filter(track => {
     if (state.queue.some(q => q.path === track.path)) return false;
     if (state.currentTrack && state.currentTrack.path === track.path) return false;
+    if (state.currentTrack && !areGenresCompatible(state.currentTrack.genre, track.genre)) return false;
     if (!isArtistAllowed(track.artist)) return false;
     if (!isSongAllowed(track.path)) return false;
     return true;
   });
 
+  // Layer 2: Relax artist cooldown, but strictly respect the 1-hour song cooldown and genre compatibility
+  if (candidates.length === 0) {
+    candidates = state.library.filter(track => {
+      if (state.queue.some(q => q.path === track.path)) return false;
+      if (state.currentTrack && state.currentTrack.path === track.path) return false;
+      if (state.currentTrack && !areGenresCompatible(state.currentTrack.genre, track.genre)) return false;
+      if (!isSongAllowed(track.path)) return false;
+      return true;
+    });
+  }
+
+  // Layer 3: Absolute fallback (only when the library has fewer songs than played in 1 hour)
   if (candidates.length === 0) {
     candidates = state.library.filter(track => {
       if (state.queue.some(q => q.path === track.path)) return false;
@@ -895,9 +937,9 @@ async function getNextDJTrack() {
       - Mood: "${state.currentTrack?.mood || 'unknown'}"
       
       Rules:
-      1. Ensure a smooth transition. Avoid jarring genre jumps (e.g. classical to heavy metal).
+      1. Ensure a smooth transition. Do not transition directly between mild genres (e.g. classical, ambient, lofi, acoustic, jazz) and heavy genres (e.g. metal, punk, hard rock, grunge). If moving between these types, you MUST select a medium genre song (e.g. pop, rock, indie, electronic) to bridge the transition.
       2. Keep similar tempos when appropriate.
-      3. Prioritize candidates whose Mood closely matches the requested mood: "${state.mood === 'custom' ? state.customMoodPrompt : state.mood}".
+      3. The user's requested mood "${state.mood === 'custom' ? state.customMoodPrompt : state.mood}" is the ABSOLUTE PRIMARY factor. Prioritize candidates whose analyzed Mood matches or fits this requested mood above all else. BPM matching and Key matching are secondary criteria to be used only for fine-tuning smooth transitions.
       
       Candidate Pool:
       ${selectedPool.map((c, i) => `${i}. Path: "${c.path}", Title: "${c.title}", Artist: "${c.artist}", Genre: "${c.genre}", BPM: ${c.bpm || 'unknown'}, Key: "${c.key || 'unknown'}", Mood: "${c.mood || 'unknown'}"`).join('\n')}
@@ -964,6 +1006,7 @@ async function getNextDJTrack() {
 function getHeuristicScore(track, currentBpm, currentGenre, currentKey) {
   let score = 0;
   
+  // 1. Mood Matching (Primary Factor)
   if (state.mood === 'custom') {
     const promptWords = state.customMoodPrompt.toLowerCase().split(' ');
     const searchArea = `${track.title} ${track.artist} ${track.genre} ${track.mood || ''}`.toLowerCase();
@@ -971,43 +1014,49 @@ function getHeuristicScore(track, currentBpm, currentGenre, currentKey) {
     promptWords.forEach(w => {
       if (w.length > 2 && searchArea.includes(w)) matches++;
     });
-    score += matches * 25;
+    score += matches * 100; // Strong primary boost for custom prompts
   } else {
-    // Mood matching score
+    // Exact mood tag match
     if (track.mood && track.mood.toLowerCase() === state.mood.toLowerCase()) {
-      score += 50; // Significant bonus for matching mood metadata!
+      score += 200; // Primary factor: Exact mood match
     } else if (track.mood) {
+      // Related mood descriptors
       const tMood = track.mood.toLowerCase();
-      if (state.mood === 'energy' && (tMood.includes('energetic') || tMood.includes('upbeat') || tMood.includes('fast') || tMood.includes('intense'))) {
-        score += 40;
-      } else if (state.mood === 'chill' && (tMood.includes('mellow') || tMood.includes('relax') || tMood.includes('ambient') || tMood.includes('calm') || tMood.includes('soft'))) {
-        score += 40;
-      } else if (state.mood === 'focus' && (tMood.includes('study') || tMood.includes('concentration') || tMood.includes('steady') || tMood.includes('instrumental') || tMood.includes('calm'))) {
-        score += 40;
-      } else if (state.mood === 'party' && (tMood.includes('dance') || tMood.includes('groove') || tMood.includes('funky') || tMood.includes('upbeat'))) {
-        score += 40;
+      if (state.mood === 'energy' && (tMood.includes('energetic') || tMood.includes('upbeat') || tMood.includes('fast') || tMood.includes('intense') || tMood.includes('heavy'))) {
+        score += 150;
+      } else if (state.mood === 'chill' && (tMood.includes('mellow') || tMood.includes('relax') || tMood.includes('ambient') || tMood.includes('calm') || tMood.includes('soft') || tMood.includes('quiet'))) {
+        score += 150;
+      } else if (state.mood === 'focus' && (tMood.includes('study') || tMood.includes('concentration') || tMood.includes('steady') || tMood.includes('instrumental') || tMood.includes('calm') || tMood.includes('ambient'))) {
+        score += 150;
+      } else if (state.mood === 'party' && (tMood.includes('dance') || tMood.includes('groove') || tMood.includes('funky') || tMood.includes('upbeat') || tMood.includes('house'))) {
+        score += 150;
       }
     }
 
+    // Target Genres for the selected mood
     const profile = moodProfiles[state.mood];
     if (profile) {
       const trackGenre = track.genre.toLowerCase();
       const genreMatch = profile.targetGenres.some(tg => trackGenre.includes(tg));
-      if (genreMatch) score += 40;
-      
-      if (track.bpm && track.bpm >= profile.bpmRange[0] && track.bpm <= profile.bpmRange[1]) {
-        score += 30;
-      }
+      if (genreMatch) score += 50; // Genre vibe match is a strong secondary factor
     }
   }
 
+  // 2. Transitions, BPM, and Key (Secondary Factors)
+  const profile = state.mood !== 'custom' ? moodProfiles[state.mood] : null;
+  if (profile && track.bpm && track.bpm >= profile.bpmRange[0] && track.bpm <= profile.bpmRange[1]) {
+    score += 20; // Secondary factor: BPM is in the target mood range
+  }
+
   if (state.currentTrack) {
+    // Jarring transition penalty (e.g. classical to heavy metal) remains high
     if (areGenresCompatible(currentGenre, track.genre)) {
-      score += 20;
+      score += 10;
     } else {
-      score -= 50;
+      score -= 100; // Heavy penalty to prevent jarring shifts
     }
 
+    // Transition BPM alignment
     if (track.bpm) {
       const bpmDiff = Math.abs(track.bpm - currentBpm);
       if (bpmDiff < 10) score += 20;
@@ -1015,8 +1064,9 @@ function getHeuristicScore(track, currentBpm, currentGenre, currentKey) {
       else score -= 15;
     }
 
+    // Transition Key compatibility
     if (track.key && track.key === currentKey) {
-      score += 15;
+      score += 10;
     }
   }
 
@@ -1153,7 +1203,7 @@ async function startCrossfade(nextTrack) {
       }
     }, intervalTime);
   }).catch(err => {
-    logConsole(`Crossfade failed: ${err.message}. Hard switching...`, 'warning');
+    logConsole(`Crossfade failed for "${nextTrack.title}" (Path: ${nextTrack.path}): ${err.message}. Hard switching...`, 'warning');
     inactivePlayer.pause();
     inactivePlayer.playbackRate = 1.0;
     activePlayer.volume = state.masterVolume;
@@ -1353,7 +1403,7 @@ async function playTrack(track) {
   try {
     await activePlayer.play();
   } catch (err) {
-    logConsole(`Playback error for "${track.title}": ${err.message}`, 'danger');
+    logConsole(`Playback error for "${track.title}" (Path: ${track.path}): ${err.message}`, 'danger');
   }
 
   if (state.isEnrichmentEnabled) {

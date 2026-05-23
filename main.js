@@ -47,9 +47,19 @@ app.whenReady().then(() => {
       const parsedUrl = new URL(request.url);
       let filePath = decodeURIComponent(parsedUrl.pathname);
       
-      // On Windows, pathname is "/C:/Users/..." -> we strip the leading slash
-      if (filePath.startsWith('/') && (filePath.charAt(2) === ':' || filePath.charAt(2) === '|')) {
-        filePath = filePath.slice(1);
+      // Extract drive letter if parsed as host (e.g. app-media://c:/Users/...)
+      let drive = parsedUrl.host || '';
+      if (drive.endsWith(':')) {
+        drive = drive.slice(0, -1);
+      }
+      
+      if (drive.length === 1 && /[a-zA-Z]/.test(drive)) {
+        filePath = drive + ':' + filePath;
+      } else {
+        // Strip leading slash if path is "/C:/Users/..."
+        if (filePath.startsWith('/') && (filePath.charAt(2) === ':' || filePath.charAt(2) === '|')) {
+          filePath = filePath.slice(1);
+        }
       }
       
       if (!fs.existsSync(filePath)) {
@@ -402,7 +412,7 @@ function markdownToLibrary(mdString) {
 }
 
 // AppData Local location for library.md
-const dbDir = process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'MyOwnPersonalDJ') : path.join(app.getPath('userData'), 'MyOwnPersonalDJ');
+const dbDir = process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'YourOwnPersonalDJ') : path.join(app.getPath('userData'), 'YourOwnPersonalDJ');
 if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
 }

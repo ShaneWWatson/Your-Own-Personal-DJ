@@ -25,7 +25,7 @@ Your Own Personal DJ is a premium desktop audio player built on Electron and Web
 Your Own Personal DJ is designed to keep your project files clean and adhere to operating system standards:
 
 - **Local Database Cache (`library.md`)**:
-  - **Location**: `C:\Users\<username>\AppData\Local\MyOwnPersonalDJ\library.md` (or `%LOCALAPPDATA%\MyOwnPersonalDJ\library.md`).
+  - **Location**: `C:\Users\<username>\AppData\Local\YourOwnPersonalDJ\library.md` (or `%LOCALAPPDATA%\YourOwnPersonalDJ\library.md`).
   - **Why**: Windows applications should store cached data and user databases in the user's local AppData directory rather than the application bundle. This prevents workspace pollution, aligns with standard Windows folder permissions, and ensures your database persists even when updating, deleting, or rebuilding the program code.
 - **Media Files**:
   - **Location**: Your music files stay exactly where they are on your system. The app uses a secure custom Electron streaming protocol (`app-media://`) to stream audio directly from your local folders without copying, duplicating, or uploading them anywhere.
