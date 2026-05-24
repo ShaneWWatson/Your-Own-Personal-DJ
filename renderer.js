@@ -871,7 +871,7 @@ async function fillQueue() {
 }
 
 async function getNextDJTrack() {
-  // Layer 1: Strict - respect both artist cooldown and 1-hour song cooldown, and genre compatibility
+  // Layer 1: Strict - respect both artist cooldown (20m), 1-hour song cooldown, and genre compatibility
   let candidates = state.library.filter(track => {
     if (state.queue.some(q => q.path === track.path)) return false;
     if (state.currentTrack && state.currentTrack.path === track.path) return false;
@@ -881,18 +881,28 @@ async function getNextDJTrack() {
     return true;
   });
 
-  // Layer 2: Relax artist cooldown, but strictly respect the 1-hour song cooldown and genre compatibility
+  // Layer 2: Relax genre compatibility, but strictly respect 1-hour song cooldown and 20-minute artist cooldown
   if (candidates.length === 0) {
     candidates = state.library.filter(track => {
       if (state.queue.some(q => q.path === track.path)) return false;
       if (state.currentTrack && state.currentTrack.path === track.path) return false;
-      if (state.currentTrack && !areGenresCompatible(state.currentTrack.genre, track.genre)) return false;
+      if (!isArtistAllowed(track.artist)) return false;
       if (!isSongAllowed(track.path)) return false;
       return true;
     });
   }
 
-  // Layer 3: Absolute fallback (only when the library has fewer songs than played in 1 hour)
+  // Layer 3: Relax artist cooldown, but strictly respect 1-hour song cooldown
+  if (candidates.length === 0) {
+    candidates = state.library.filter(track => {
+      if (state.queue.some(q => q.path === track.path)) return false;
+      if (state.currentTrack && state.currentTrack.path === track.path) return false;
+      if (!isSongAllowed(track.path)) return false;
+      return true;
+    });
+  }
+
+  // Layer 4: Absolute fallback - relax song cooldown (only if library size is too small)
   if (candidates.length === 0) {
     candidates = state.library.filter(track => {
       if (state.queue.some(q => q.path === track.path)) return false;
@@ -916,14 +926,24 @@ async function getNextDJTrack() {
         const shuffled = [...candidates].sort(() => 0.5 - Math.random());
         selectedPool = shuffled.slice(0, 15);
       } else {
-        selectedPool = candidates
-          .map(c => ({
-            score: getHeuristicScore(c, currentBpm, currentGenre, currentKey),
-            track: c
-          }))
-          .sort((a, b) => b.score - a.score)
-          .slice(0, 10)
-          .map(item => item.track);
+        const scored = candidates.map(c => ({
+          score: getHeuristicScore(c, currentBpm, currentGenre, currentKey),
+          track: c
+        }));
+        
+        // Sort to find the highest score
+        scored.sort((a, b) => b.score - a.score);
+        if (scored.length > 0) {
+          const maxScore = scored[0].score;
+          // Gather all tracks that are top performers (within 40 points of the max score, e.g. other matching tracks)
+          const topPerformers = scored.filter(item => item.score >= maxScore - 40);
+          
+          // Shuffle the top performers randomly so that the AI receives a different set every time
+          const shuffledTop = [...topPerformers].sort(() => 0.5 - Math.random());
+          selectedPool = shuffledTop.slice(0, 10).map(item => item.track);
+        } else {
+          selectedPool = [];
+        }
       }
 
       const prompt = `<start_of_turn>user\nYou are a professional radio DJ. Pick the NEXT song to play from the Candidate Pool to match the user's mood: "${state.mood === 'custom' ? state.customMoodPrompt : state.mood}".
@@ -972,9 +992,11 @@ async function getNextDJTrack() {
 
   // 2. Heuristic Rule Engine
   const scoredCandidates = candidates.map(c => {
+    // Add a random noise factor (0-30) to ensure a different randomized set of candidates is chosen each time
+    const noise = Math.random() * 30;
     return {
       track: c,
-      score: getHeuristicScore(c, currentBpm, currentGenre, currentKey)
+      score: getHeuristicScore(c, currentBpm, currentGenre, currentKey) + noise
     };
   });
 

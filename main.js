@@ -123,7 +123,19 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', function () {
-  if (process.platform !== 'darwin') app.quit();
+  app.exit(0);
+});
+
+app.on('will-quit', function () {
+  app.exit(0);
+});
+
+process.on('SIGINT', () => {
+  app.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  app.exit(0);
 });
 
 // Native Directory Picker
