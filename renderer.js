@@ -9,16 +9,18 @@ let state = {
   isPlaying: false,
   isScanning: false,
   folders: [],
-  ollamaStatus: 'checking', // checking (loading model), connected (ready), fallback (rules active), disconnected (failed)
+  ollamaStatus: 'checking', // checking, connected, fallback, offline
   ollamaModel: null,
   isEnrichmentEnabled: true,
   
-  // DJ Crossfading & Device settings
-  crossfadeDuration: 6, // default 6 seconds
+  // DJ Settings
+  crossfadeDuration: 6,
   isCrossfading: false,
   masterVolume: 0.8,
   outputDeviceId: 'default',
-  isDraggingSlider: false
+  isDraggingSlider: false,
+  currentTime: 0,
+  duration: 0
 };
 
 // Target BPM and Key profiles for Moods
@@ -59,12 +61,6 @@ const trackAlbum = document.getElementById('track-album');
 const albumArt = document.getElementById('album-art');
 const vinylDisc = document.getElementById('vinyl-disc');
 const canvas = document.getElementById('waveform-visualizer');
-
-// Dual Audio Player Elements for Crossfading
-const audioPlayerA = document.getElementById('audio-player-a');
-const audioPlayerB = document.getElementById('audio-player-b');
-let activePlayer = audioPlayerA;
-let inactivePlayer = audioPlayerB;
 
 const trackDurationCurrent = document.getElementById('track-duration-current');
 const trackDurationTotal = document.getElementById('track-duration-total');
@@ -110,47 +106,362 @@ const ctx = canvas.getContext('2d');
 canvas.width = canvas.parentElement.clientWidth;
 canvas.height = 48;
 
-// Local Transformers.js references
-let pipeline = null;
-let env = null;
-let generator = null;
+// --- IndexedDB Database Persistence ---
+const DB_NAME = 'YourOwnPersonalDJ_DB';
+const DB_VERSION = 1;
 
-// Initialize App & Local AI Pipeline
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = (event) => {
+      const db = event.target.result;
+      if (!db.objectStoreNames.contains('folders')) {
+        db.createObjectStore('folders', { keyPath: 'path' });
+      }
+      if (!db.objectStoreNames.contains('tracks')) {
+        const trackStore = db.createObjectStore('tracks', { keyPath: 'path' });
+        trackStore.createIndex('mood', 'mood', { unique: false });
+        trackStore.createIndex('bpm', 'bpm', { unique: false });
+      }
+    };
+    request.onsuccess = (event) => resolve(event.target.result);
+    request.onerror = (event) => reject(event.target.error);
+  });
+}
+
+async function dbGetFolders() {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction('folders', 'readonly');
+    const store = transaction.objectStore('folders');
+    const request = store.getAll();
+    request.onsuccess = () => resolve(request.result.map(f => f.path));
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function dbAddFolder(path) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction('folders', 'readwrite');
+    const store = transaction.objectStore('folders');
+    const request = store.put({ path });
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function dbRemoveFolder(path) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction('folders', 'readwrite');
+    const store = transaction.objectStore('folders');
+    const request = store.delete(path);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function dbGetTracks() {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction('tracks', 'readonly');
+    const store = transaction.objectStore('tracks');
+    const request = store.getAll();
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function dbSaveTrack(track) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction('tracks', 'readwrite');
+    const store = transaction.objectStore('tracks');
+    const request = store.put(track);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function dbSaveTracksBatch(tracks) {
+  if (tracks.length === 0) return;
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction('tracks', 'readwrite');
+    const store = transaction.objectStore('tracks');
+    tracks.forEach(t => store.put(t));
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+  });
+}
+
+async function dbDeleteTracksBatch(paths) {
+  if (paths.length === 0) return;
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction('tracks', 'readwrite');
+    const store = transaction.objectStore('tracks');
+    paths.forEach(p => store.delete(p));
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+  });
+}
+
+// --- local AI Web Worker Manager ---
+let aiWorker = null;
+const pendingWorkerRequests = new Map();
+let workerRequestId = 0;
+
+function initAIWorker() {
+  state.ollamaStatus = 'checking';
+  updateAIStatusUI();
+  logConsole('Initializing local AI Web Worker thread...', 'system');
+
+  aiWorker = new Worker('ai-worker.js', { type: 'module' });
+
+  aiWorker.onmessage = (event) => {
+    const { type, id, data, error } = event.data;
+
+    if (type === 'status-update') {
+      const { status, model, log, logType } = data;
+      if (status) {
+        state.ollamaStatus = status;
+        updateAIStatusUI();
+      }
+      if (model) {
+        state.ollamaModel = model;
+        updateAIStatusUI();
+      }
+      if (log) {
+        logConsole(log, logType || 'system');
+      }
+    } else {
+      const pending = pendingWorkerRequests.get(id);
+      if (pending) {
+        pendingWorkerRequests.delete(id);
+        if (error) {
+          pending.reject(new Error(error));
+        } else {
+          pending.resolve(data);
+        }
+      }
+    }
+  };
+
+  aiWorker.onerror = (err) => {
+    console.error('AI Web Worker Error:', err);
+    logConsole(`AI Web Worker Error: ${err.message}`, 'danger');
+  };
+
+  sendWorkerRequest('init');
+}
+
+function sendWorkerRequest(action, payload = {}) {
+  return new Promise((resolve, reject) => {
+    const id = ++workerRequestId;
+    pendingWorkerRequests.set(id, { resolve, reject });
+    aiWorker.postMessage({ action, id, payload });
+  });
+}
+
+// --- Audio Process Communication Manager ---
+const pendingAudioRequests = new Map();
+let audioRequestId = 0;
+
+function sendAudioCommand(command, payload = {}) {
+  window.api.sendToAudio({ command, payload });
+}
+
+function sendAudioRequest(command, payload = {}) {
+  return new Promise((resolve, reject) => {
+    const id = ++audioRequestId;
+    pendingAudioRequests.set(id, { resolve, reject });
+    window.api.sendToAudio({ command, payload: { ...payload, requestId: id } });
+  });
+}
+
+function setupAudioEvents() {
+  window.api.onAudioEvent((data) => {
+    const { event, data: payload } = data;
+
+    switch (event) {
+      case 'timeupdate':
+        state.currentTime = payload.currentTime;
+        state.duration = payload.duration;
+        if (!state.isDraggingSlider) {
+          progressSlider.value = (payload.currentTime / payload.duration) * 100;
+          trackDurationCurrent.innerText = formatDuration(payload.currentTime);
+        }
+        break;
+
+      case 'play':
+        state.isPlaying = true;
+        vinylDisc.classList.add('playing');
+        vinylDisc.classList.remove('paused');
+        svgPlay.classList.add('hidden');
+        svgPause.classList.remove('hidden');
+        startSimulatedVisualizer();
+        break;
+
+      case 'pause':
+        state.isPlaying = false;
+        vinylDisc.classList.remove('playing');
+        vinylDisc.classList.add('paused');
+        svgPlay.classList.remove('hidden');
+        svgPause.classList.add('hidden');
+        break;
+
+      case 'loadedmetadata':
+        state.duration = payload.duration;
+        trackDurationTotal.innerText = formatDuration(payload.duration);
+        break;
+
+      case 'ended':
+        logConsole('Track finished. Transitioning...', 'info');
+        skipTrack();
+        break;
+
+      case 'request-next-track':
+        playNextTrackFromQueue();
+        break;
+
+      case 'crossfade-start':
+        handleCrossfadeStart(payload.track);
+        break;
+
+      case 'crossfade-end':
+        handleCrossfadeEnd();
+        break;
+
+      case 'transients-analyzed':
+        if (payload.requestId) {
+          const pending = pendingAudioRequests.get(payload.requestId);
+          if (pending) {
+            pendingAudioRequests.delete(payload.requestId);
+            if (payload.error) {
+              pending.reject(new Error(payload.error));
+            } else {
+              pending.resolve(payload);
+            }
+          }
+        } else {
+          // On-the-fly analysis from audio window. Update database!
+          const track = state.library.find(t => t.path === payload.path);
+          if (track) {
+            track.beatOffset = payload.beatOffset;
+            dbSaveTrack(track);
+            logConsole(`Saved on-the-fly analysis for "${track.title}": beatOffset = ${payload.beatOffset}`, 'success');
+          }
+        }
+        break;
+
+      case 'log':
+        logConsole(payload.message, payload.type);
+        break;
+
+      case 'error':
+        logConsole(payload.message, 'danger');
+        break;
+    }
+  });
+}
+
+// Queue transition triggered from the audio process
+async function playNextTrackFromQueue() {
+  if (state.queue.length > 0) {
+    const nextItem = state.queue.shift();
+    const track = state.library.find(t => t.path === nextItem.path);
+    renderQueue();
+    sendAudioCommand('start-crossfade', { nextTrack: track });
+  }
+}
+
+function handleCrossfadeStart(track) {
+  // Sync state
+  state.currentTrack = track;
+  state.isCrossfading = true; // Set crossfading state temporarily during switch
+  updateNowPlayingUI();
+
+  // Save history
+  state.history.push({
+    path: track.path,
+    artist: track.artist,
+    playedAt: Date.now()
+  });
+  if (state.history.length > 100) state.history.shift();
+
+  if (state.isEnrichmentEnabled) {
+    enrichMetadata(track.artist, track.title);
+  }
+}
+
+async function handleCrossfadeEnd() {
+  state.isCrossfading = false;
+  await fillQueue();
+}
+
+// Initialize App & Database
 window.addEventListener('load', async () => {
   logConsole('Initializing Your Own Personal DJ...', 'system');
   
-  // Set default player volumes
-  audioPlayerA.volume = state.masterVolume;
-  audioPlayerB.volume = 0;
-
-  // Load folders and library from cache
-  const cachedLibrary = await window.api.loadLibrary();
-  if (cachedLibrary) {
-    state.library = cachedLibrary.library || [];
-    state.folders = cachedLibrary.folders || [];
-    logConsole(`Loaded ${state.library.length} tracks from library cache.`, 'success');
-    renderFoldersList();
-    renderLibraryTable();
-    checkScanButtonState();
-    updateAnalysisProgress();
+  // Set up audio events bridge
+  setupAudioEvents();
+  
+  // Load folders and library from IndexedDB (with legacy auto-migration)
+  let foldersListDB = [];
+  let tracksDB = [];
+  
+  try {
+    foldersListDB = await dbGetFolders();
+    tracksDB = await dbGetTracks();
+  } catch (err) {
+    console.error('IndexedDB load error:', err);
+    logConsole(`Database initialization error: ${err.message}`, 'danger');
+  }
+  
+  if (foldersListDB.length > 0 || tracksDB.length > 0) {
+    state.library = tracksDB;
+    state.folders = foldersListDB;
+    logConsole(`Loaded ${state.library.length} tracks from IndexedDB cache.`, 'success');
   } else {
-    // Attempt to load system default music folder
-    const systemMusic = await window.api.getSystemMusicFolder();
-    if (systemMusic) {
-      state.folders.push(systemMusic);
-      renderFoldersList();
-      checkScanButtonState();
+    // Database is empty. Check if we need to migrate from legacy library.md
+    logConsole('Checking for legacy library.md database for migration...', 'system');
+    const migrated = await window.api.loadLibrary();
+    if (migrated) {
+      state.folders = migrated.folders || [];
+      state.library = migrated.library || [];
+      
+      // Save folders and tracks to IndexedDB
+      for (const f of state.folders) {
+        await dbAddFolder(f);
+      }
+      await dbSaveTracksBatch(state.library);
+      logConsole(`Successfully migrated ${state.library.length} tracks from library.md to IndexedDB.`, 'success');
+      showNotification('Migration Complete', 'Successfully imported legacy music library to IndexedDB.');
+    } else {
+      // Attempt to load system default music folder
+      const systemMusic = await window.api.getSystemMusicFolder();
+      if (systemMusic) {
+        state.folders.push(systemMusic);
+        await dbAddFolder(systemMusic);
+      }
     }
   }
+
+  renderFoldersList();
+  renderLibraryTable();
+  checkScanButtonState();
+  updateAnalysisProgress();
 
   // Set up settings triggers
   setUpSettings();
 
-  // Set up audio player triggers
-  setUpAudioPlayer();
+  // Set up audio player triggers (UI side)
+  setUpAudioPlayerControls();
 
-  // Initialize local AI engine (runs in background)
-  await initLocalAI();
+  // Initialize local AI engine in Worker
+  initAIWorker();
 
   // Start background metadata processor
   setInterval(backgroundMetadataProcessor, 6000);
@@ -165,7 +476,6 @@ function logConsole(message, type = 'system') {
   const line = document.createElement('div');
   line.className = `console-line ${type}`;
   
-  // Add timestamp
   const now = new Date();
   const timeStr = now.toTimeString().split(' ')[0];
   line.innerText = `[${timeStr}] ${message}`;
@@ -180,7 +490,6 @@ function showNotification(title, message) {
   popupMessage.innerText = message;
   popupNotification.classList.remove('hidden');
   
-  // Auto dismiss after 5 seconds
   setTimeout(() => {
     popupNotification.classList.add('hidden');
   }, 5000);
@@ -205,29 +514,18 @@ function setUpSettings() {
     const val = parseInt(e.target.value);
     state.crossfadeDuration = val;
     crossfadeValue.innerText = `${val}s`;
+    sendAudioCommand('set-crossfade-duration', { duration: val });
   });
 
   selectOutputDevice.addEventListener('change', async (e) => {
     const deviceId = e.target.value;
     state.outputDeviceId = deviceId;
-    
-    try {
-      if (typeof audioPlayerA.setSinkId === 'function') {
-        await audioPlayerA.setSinkId(deviceId);
-        await audioPlayerB.setSinkId(deviceId);
-        logConsole(`Audio output device changed successfully.`, 'success');
-      } else {
-        logConsole('Changing audio output device is not supported in this environment.', 'warning');
-      }
-    } catch (err) {
-      logConsole(`Error setting audio output device: ${err.message}`, 'danger');
-    }
+    sendAudioCommand('set-output-device', { deviceId });
   });
 }
 
 async function updateOutputDevices() {
   try {
-    // Request permission implicitly if not granted
     await navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => {});
     
     const devices = await navigator.mediaDevices.enumerateDevices();
@@ -260,86 +558,6 @@ async function updateOutputDevices() {
   }
 }
 
-// --- Self-Contained Local AI Engine (Transformers.js) ---
-async function initLocalAI() {
-  state.ollamaStatus = 'checking';
-  updateAIStatusUI();
-  logConsole('Loading Transformers.js pipeline...', 'system');
-
-  try {
-    const tf = await import('@huggingface/transformers');
-    pipeline = tf.pipeline;
-    env = tf.env;
-
-    const modelId = 'onnx-community/gemma-2-2b-it-ONNX-w4a16';
-    logConsole('Loading local Gemma model weights (WebGPU)...', 'info');
-
-    generator = await pipeline('text-generation', modelId, {
-      device: 'webgpu',
-      progress_callback: (data) => {
-        if (data.status === 'downloading') {
-          const percent = Math.round((data.loaded / data.total) * 100);
-          if (percent % 10 === 0) {
-            logConsole(`Downloading Gemma model: ${percent}% of ${data.file}`, 'info');
-          }
-        } else if (data.status === 'done') {
-          logConsole(`Loaded weights block: ${data.file}`, 'success');
-        }
-      }
-    });
-
-    state.ollamaStatus = 'connected';
-    state.ollamaModel = 'Gemma 2B (Local WebGPU)';
-    logConsole('Local Gemma model loaded and active using WebGPU acceleration!', 'success');
-  } catch (err) {
-    console.error('WebGPU loading failed, trying CPU WASM fallback:', err);
-    logConsole(`WebGPU failed: ${err.message}. Retrying with CPU WebAssembly...`, 'warning');
-    
-    try {
-      const modelId = 'onnx-community/gemma-2-2b-it-ONNX-w4a16';
-      generator = await pipeline('text-generation', modelId, {
-        device: 'wasm',
-        progress_callback: (data) => {
-          if (data.status === 'downloading') {
-            const percent = Math.round((data.loaded / data.total) * 100);
-            if (percent % 10 === 0) {
-              logConsole(`Downloading weights (WASM fallback): ${percent}%`, 'info');
-            }
-          }
-        }
-      });
-      state.ollamaStatus = 'connected';
-      state.ollamaModel = 'Gemma 2B (Local CPU WASM)';
-      logConsole('Local Gemma model loaded successfully using CPU WASM fallback.', 'success');
-    } catch (fallbackErr) {
-      console.error('All local AI loaders failed:', fallbackErr);
-      state.ollamaStatus = 'fallback';
-      state.ollamaModel = 'Local Heuristic Engine';
-      logConsole(`AI load failed: ${fallbackErr.message}. Operating in smart heuristic mode.`, 'danger');
-    }
-  }
-
-  updateAIStatusUI();
-}
-
-function updateAIStatusUI() {
-  aiStatusBadge.className = `ai-status-badge ${state.ollamaStatus}`;
-  
-  if (state.ollamaStatus === 'connected') {
-    aiStatusText.innerText = 'Active';
-    aiModelName.innerText = state.ollamaModel;
-  } else if (state.ollamaStatus === 'checking') {
-    aiStatusText.innerText = 'Loading...';
-    aiModelName.innerText = 'Initializing Model...';
-  } else if (state.ollamaStatus === 'fallback') {
-    aiStatusText.innerText = 'Heuristics';
-    aiModelName.innerText = 'Rule-based Heuristics';
-  } else {
-    aiStatusText.innerText = 'Offline';
-    aiModelName.innerText = 'Local Heuristics';
-  }
-}
-
 function parseLLMJSON(text) {
   let cleaned = text.trim();
   if (cleaned.startsWith('```')) {
@@ -364,7 +582,8 @@ btnAddFolder.addEventListener('click', async () => {
   if (folderPath && !state.folders.includes(folderPath)) {
     state.folders.push(folderPath);
     renderFoldersList();
-    saveLibraryState();
+    
+    await dbAddFolder(folderPath);
     checkScanButtonState();
     logConsole(`Added directory: ${folderPath}`, 'system');
   }
@@ -388,10 +607,11 @@ function renderFoldersList() {
         <path d="M18 6 6 18M6 6l12 12"></path>
       </svg>
     `;
-    btnRemove.addEventListener('click', () => {
+    btnRemove.addEventListener('click', async () => {
       state.folders.splice(idx, 1);
       renderFoldersList();
-      saveLibraryState();
+      
+      await dbRemoveFolder(folder);
       checkScanButtonState();
       logConsole(`Removed directory: ${folder}`, 'system');
     });
@@ -424,7 +644,6 @@ btnStartScan.addEventListener('click', () => {
   scanPercentage.innerText = '0%';
   scanStatusText.innerText = 'Reading directories...';
   
-  // Track scanned paths to clean up dead links in database
   state.scannedPaths = new Set();
   
   logConsole('Starting asynchronous library scan...', 'info');
@@ -433,7 +652,7 @@ btnStartScan.addEventListener('click', () => {
 
 let libraryRenderTimeout = null;
 
-window.api.onScanProgress((data) => {
+window.api.onScanProgress(async (data) => {
   const { current, total, track } = data;
   const percent = Math.round((current / total) * 100);
   
@@ -441,7 +660,6 @@ window.api.onScanProgress((data) => {
   scanPercentage.innerText = `${percent}%`;
   scanStatusText.innerText = `Scanned ${current}/${total} files`;
 
-  // Record scanned path
   if (state.scannedPaths) {
     state.scannedPaths.add(track.path);
   }
@@ -454,10 +672,19 @@ window.api.onScanProgress((data) => {
     if (track.key === null && state.library[existingIdx].key !== null) {
       track.key = state.library[existingIdx].key;
     }
+    if ((track.mood === undefined || track.mood === null) && state.library[existingIdx].mood) {
+      track.mood = state.library[existingIdx].mood;
+    }
+    if ((track.beatOffset === undefined || track.beatOffset === null) && state.library[existingIdx].beatOffset !== null && state.library[existingIdx].beatOffset !== undefined) {
+      track.beatOffset = state.library[existingIdx].beatOffset;
+    }
     state.library[existingIdx] = track;
   } else {
     state.library.push(track);
   }
+
+  // Save the single track directly to IndexedDB
+  await dbSaveTrack(track);
 
   if (!libraryRenderTimeout) {
     libraryRenderTimeout = setTimeout(() => {
@@ -467,13 +694,17 @@ window.api.onScanProgress((data) => {
   }
 });
 
-window.api.onScanComplete((data) => {
+window.api.onScanComplete(async (data) => {
   state.isScanning = false;
   checkScanButtonState();
   scanProgressContainer.classList.add('hidden');
   
   // Clean up dead/deleted paths that were not found in the scan
   if (state.scannedPaths) {
+    const deadTracks = state.library.filter(t => !state.scannedPaths.has(t.path));
+    const deadPaths = deadTracks.map(t => t.path);
+    
+    await dbDeleteTracksBatch(deadPaths);
     state.library = state.library.filter(t => state.scannedPaths.has(t.path));
     delete state.scannedPaths;
   }
@@ -483,184 +714,14 @@ window.api.onScanComplete((data) => {
     libraryRenderTimeout = null;
   }
   renderLibraryTable();
-  saveLibraryState();
   updateAnalysisProgress();
   
   logConsole(`Library scan complete. Found ${data.total} audio files.`, 'success');
   showNotification('Scanning Completed', `Successfully scanned and cataloged ${data.total} music tracks.`);
 });
 
-async function saveLibraryState() {
-  await window.api.saveLibrary({
-    folders: state.folders,
-    library: state.library
-  });
-}
-
 // --- Background Metadata Processor (BPM & Key via Gemma & Transient Analysis) ---
 let isProcessingMetadata = false;
-
-// Audio Transient analysis helper
-async function analyzeTrackAudio(trackPath, knownBpm = null) {
-  try {
-    const secureUrl = 'app-media:///' + trackPath.replace(/\\/g, '/');
-    const response = await fetch(secureUrl);
-    if (!response.ok) throw new Error(`Fetch failed with status ${response.status}`);
-    
-    const arrayBuffer = await response.arrayBuffer();
-    const ctx = new (window.OfflineAudioContext || window.AudioContext)(1, 44100, 44100);
-    
-    // Decode audio data
-    const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
-    
-    // We only analyze the first 30 seconds for speed and memory efficiency
-    const sampleRate = audioBuffer.sampleRate;
-    const channelData = audioBuffer.getChannelData(0);
-    const duration = Math.min(audioBuffer.duration, 30);
-    
-    const stepSeconds = 0.01; // 10ms windows
-    const stepSamples = Math.floor(sampleRate * stepSeconds);
-    const numSteps = Math.floor(duration / stepSeconds);
-    
-    // 1. Calculate energy envelope (absolute amplitude)
-    const envelope = new Float32Array(numSteps);
-    for (let i = 0; i < numSteps; i++) {
-      const startSample = i * stepSamples;
-      let sum = 0;
-      const endSample = Math.min(startSample + stepSamples, channelData.length);
-      for (let j = startSample; j < endSample; j++) {
-        sum += Math.abs(channelData[j]);
-      }
-      envelope[i] = sum / (endSample - startSample || 1);
-    }
-    
-    // 2. Detect peaks in the envelope
-    const peakTimes = [];
-    const peakAmplitudes = [];
-    const movingAverageWindow = 15; // 150ms window
-    
-    for (let i = movingAverageWindow; i < numSteps - movingAverageWindow; i++) {
-      let localSum = 0;
-      for (let j = i - movingAverageWindow; j <= i + movingAverageWindow; j++) {
-        localSum += envelope[j];
-      }
-      const localAvg = localSum / (2 * movingAverageWindow + 1);
-      
-      // Look for peaks that are 30% higher than the local average
-      if (envelope[i] > localAvg * 1.3 && 
-          envelope[i] > envelope[i - 1] && 
-          envelope[i] > envelope[i + 1] &&
-          envelope[i] > envelope[i - 2] &&
-          envelope[i] > envelope[i + 2]) {
-        peakTimes.push(i * stepSeconds);
-        peakAmplitudes.push(envelope[i]);
-      }
-    }
-    
-    if (peakTimes.length === 0) {
-      return { bpm: knownBpm || 100, beatOffset: 0 };
-    }
-    
-    // 3. Determine BPM if not known
-    let bpm = knownBpm;
-    if (!bpm) {
-      // Calculate intervals between peaks (up to 4s apart)
-      const intervals = [];
-      for (let i = 0; i < peakTimes.length; i++) {
-        for (let j = i + 1; j < Math.min(i + 10, peakTimes.length); j++) {
-          const interval = peakTimes[j] - peakTimes[i];
-          if (interval >= 0.3 && interval <= 1.2) { // 50 to 200 BPM
-            intervals.push(interval);
-          }
-        }
-      }
-      
-      if (intervals.length > 0) {
-        // Group intervals into bins to find the most common tempo (BPM)
-        const bpmCandidates = intervals.map(inv => 60 / inv);
-        let bestBpm = 100;
-        let maxCount = 0;
-        
-        for (let targetBpm = 60; targetBpm <= 180; targetBpm++) {
-          let count = 0;
-          for (const cand of bpmCandidates) {
-            if (Math.abs(cand - targetBpm) <= 1.5) {
-              count++;
-            }
-            if (Math.abs(cand * 2 - targetBpm) <= 1.5) {
-              count += 0.5;
-            }
-            if (Math.abs(cand / 2 - targetBpm) <= 1.5) {
-              count += 0.5;
-            }
-          }
-          if (count > maxCount) {
-            maxCount = count;
-            bestBpm = targetBpm;
-          }
-        }
-        bpm = bestBpm;
-      } else {
-        bpm = 100; // fallback
-      }
-    }
-    
-    // 4. Grid fitting to find the first beat offset
-    const T = 60 / bpm;
-    let bestOffset = 0;
-    let maxScore = -1;
-    const numCandidates = 100;
-    const sigma = 0.03; // 30ms tolerance
-    
-    for (let c = 0; c < numCandidates; c++) {
-      const candidateOffset = (c / numCandidates) * T;
-      let score = 0;
-      
-      for (let p = 0; p < peakTimes.length; p++) {
-        const peakTime = peakTimes[p];
-        const amp = peakAmplitudes[p];
-        
-        const rem = (peakTime - candidateOffset) % T;
-        const dist = Math.min(Math.abs(rem), T - Math.abs(rem));
-        
-        score += amp * Math.exp(-(dist * dist) / (2 * sigma * sigma));
-      }
-      
-      if (score > maxScore) {
-        maxScore = score;
-        bestOffset = candidateOffset;
-      }
-    }
-    
-    return { bpm, beatOffset: parseFloat(bestOffset.toFixed(3)) };
-  } catch (err) {
-    console.error('Error in analyzeTrackAudio:', err);
-    return { bpm: knownBpm || 100, beatOffset: 0 };
-  }
-}
-
-// Tempo-drift ramp helper to slide playbackRate back to target smoothly
-function rampPlaybackRate(player, targetRate, durationMs) {
-  const startRate = player.playbackRate;
-  if (startRate === targetRate) return;
-  
-  const stepTime = 100; // update rate every 100ms
-  const totalSteps = durationMs / stepTime;
-  let currentStep = 0;
-  
-  const interval = setInterval(() => {
-    currentStep++;
-    const ratio = currentStep / totalSteps;
-    
-    if (ratio >= 1) {
-      clearInterval(interval);
-      player.playbackRate = targetRate;
-      logConsole(`Tempo drift complete. Track playing at original speed (${targetRate}x)`, 'system');
-    } else {
-      player.playbackRate = startRate + (targetRate - startRate) * ratio;
-    }
-  }, stepTime);
-}
 
 function updateAnalysisProgress() {
   if (state.library.length === 0) {
@@ -669,7 +730,6 @@ function updateAnalysisProgress() {
   }
 
   const total = state.library.length;
-  // A track is completed if it has bpm, key, mood, and beatOffset
   const completed = state.library.filter(t => t.bpm !== null && t.key !== null && t.mood !== undefined && t.mood !== null && t.beatOffset !== undefined && t.beatOffset !== null).length;
   const remaining = total - completed;
 
@@ -699,27 +759,14 @@ async function backgroundMetadataProcessor() {
 
   let bpm = track.bpm;
   let key = track.key;
+  let mood = track.mood;
   let beatOffset = track.beatOffset;
 
-  if (bpm === null || key === null) {
-    if (state.ollamaStatus === 'connected' && generator) {
+  if (bpm === null || key === null || mood === undefined || mood === null) {
+    if (state.ollamaStatus === 'connected') {
       try {
-        const prompt = `<start_of_turn>user\nEstimate the BPM (beats per minute, integer), musical Key (e.g., C Maj, A Min, F# Maj, E Min), and Mood (a single-word general mood descriptor in lowercase, e.g., chill, focus, energy, party, sad, dark, uplifting, calm, intense) for the following track.
-        Track: "${track.title}"
-        Artist: "${track.artist}"
-        Genre: "${track.genre}"
-        
-        Respond ONLY in raw JSON format with this structure:
-        {"bpm": 120, "key": "A Min", "mood": "chill"}<end_of_turn>\n<start_of_turn>model\n`;
-
-        const output = await generator(prompt, {
-          max_new_tokens: 80,
-          temperature: 0.1,
-          return_full_text: false
-        });
-
-        const generatedText = output[0].generated_text;
-        const parsed = parseLLMJSON(generatedText);
+        const result = await sendWorkerRequest('analyze-metadata', { track });
+        const parsed = parseLLMJSON(result.generatedText);
         
         bpm = parseInt(parsed.bpm) || 100;
         key = parsed.key || 'C Maj';
@@ -744,11 +791,16 @@ async function backgroundMetadataProcessor() {
   // Analyze audio transients for beatOffset if missing
   if (beatOffset === undefined || beatOffset === null) {
     logConsole(`Analyzing audio transients for "${track.title}"...`, 'info');
-    const audioAnalysis = await analyzeTrackAudio(track.path, bpm);
-    beatOffset = audioAnalysis.beatOffset;
-    if (audioAnalysis.bpm && (!track.bpm || track.bpm === 100)) {
-      bpm = audioAnalysis.bpm;
-      logConsole(`Refined BPM for "${track.title}" from audio analysis: ${bpm}`, 'success');
+    try {
+      const audioAnalysis = await sendAudioRequest('analyze-transients', { path: track.path, bpm });
+      beatOffset = audioAnalysis.beatOffset;
+      if (audioAnalysis.bpm && (!track.bpm || track.bpm === 100)) {
+        bpm = audioAnalysis.bpm;
+        logConsole(`Refined BPM for "${track.title}" from audio analysis: ${bpm}`, 'success');
+      }
+    } catch (err) {
+      logConsole(`Audio transient analysis failed for "${track.title}": ${err.message}`, 'warning');
+      beatOffset = 0;
     }
   }
 
@@ -762,13 +814,13 @@ async function backgroundMetadataProcessor() {
   if (track.format.toLowerCase() === 'mp3') {
     const res = await window.api.writeTags(track.path, bpm, key);
     if (res.success) {
-      logConsole(`Successfully wrote tags to file: ${track.title}`, 'success');
+      logConsole(`Successfully wrote ID3 tags to file: ${track.title}`, 'success');
     } else {
       logConsole(`Failed to write tags: ${res.error}`, 'warning');
     }
   }
 
-  await saveLibraryState();
+  await dbSaveTrack(track);
   renderLibraryTable();
   updateAnalysisProgress();
   
@@ -849,7 +901,6 @@ function areGenresCompatible(genre1, genre2) {
   const isHeavy1 = heavyGenres.some(g => genre1.includes(g));
   const isHeavy2 = heavyGenres.some(g => genre2.includes(g));
   
-  // Strictly prevent direct Mild <-> Heavy transitions
   if ((isMild1 && isHeavy2) || (isHeavy1 && isMild2)) {
     return false;
   }
@@ -871,7 +922,7 @@ async function fillQueue() {
 }
 
 async function getNextDJTrack() {
-  // Layer 1: Strict - respect both artist cooldown (20m), 1-hour song cooldown, and genre compatibility
+  // Layer 1: Strict constraints
   let candidates = state.library.filter(track => {
     if (state.queue.some(q => q.path === track.path)) return false;
     if (state.currentTrack && state.currentTrack.path === track.path) return false;
@@ -881,7 +932,7 @@ async function getNextDJTrack() {
     return true;
   });
 
-  // Layer 2: Relax genre compatibility, but strictly respect 1-hour song cooldown and 20-minute artist cooldown
+  // Layer 2: Relax genre constraints
   if (candidates.length === 0) {
     candidates = state.library.filter(track => {
       if (state.queue.some(q => q.path === track.path)) return false;
@@ -892,7 +943,7 @@ async function getNextDJTrack() {
     });
   }
 
-  // Layer 3: Relax artist cooldown, but strictly respect 1-hour song cooldown
+  // Layer 3: Relax artist constraints
   if (candidates.length === 0) {
     candidates = state.library.filter(track => {
       if (state.queue.some(q => q.path === track.path)) return false;
@@ -902,7 +953,7 @@ async function getNextDJTrack() {
     });
   }
 
-  // Layer 4: Absolute fallback - relax song cooldown (only if library size is too small)
+  // Layer 4: Absolute fallback
   if (candidates.length === 0) {
     candidates = state.library.filter(track => {
       if (state.queue.some(q => q.path === track.path)) return false;
@@ -917,12 +968,11 @@ async function getNextDJTrack() {
   const currentGenre = state.currentTrack?.genre || 'unknown';
   const currentKey = state.currentTrack?.key || 'C Maj';
 
-  // 1. Local AI Decision Maker
-  if (state.ollamaStatus === 'connected' && generator) {
+  // 1. Local AI DJ Decision Maker (running in Web Worker)
+  if (state.ollamaStatus === 'connected' && aiWorker) {
     try {
       let selectedPool = [];
       if (state.mood === 'custom') {
-        // Shuffle candidates randomly to give the AI a varied sample to evaluate for the custom mood
         const shuffled = [...candidates].sort(() => 0.5 - Math.random());
         selectedPool = shuffled.slice(0, 15);
       } else {
@@ -931,59 +981,37 @@ async function getNextDJTrack() {
           track: c
         }));
         
-        // Sort to find the highest score
         scored.sort((a, b) => b.score - a.score);
         if (scored.length > 0) {
           const maxScore = scored[0].score;
-          // Gather all tracks that are top performers (within 40 points of the max score, e.g. other matching tracks)
           const topPerformers = scored.filter(item => item.score >= maxScore - 40);
-          
-          // Shuffle the top performers randomly so that the AI receives a different set every time
           const shuffledTop = [...topPerformers].sort(() => 0.5 - Math.random());
           selectedPool = shuffledTop.slice(0, 10).map(item => item.track);
-        } else {
-          selectedPool = [];
         }
       }
 
-      const prompt = `<start_of_turn>user\nYou are a professional radio DJ. Pick the NEXT song to play from the Candidate Pool to match the user's mood: "${state.mood === 'custom' ? state.customMoodPrompt : state.mood}".
-      
-      Current playing song:
-      - Title: "${state.currentTrack?.title || 'None'}"
-      - Artist: "${state.currentTrack?.artist || 'None'}"
-      - Genre: "${currentGenre}"
-      - BPM: ${currentBpm}
-      - Key: "${currentKey}"
-      - Mood: "${state.currentTrack?.mood || 'unknown'}"
-      
-      Rules:
-      1. Ensure a smooth transition. Do not transition directly between mild genres (e.g. classical, ambient, lofi, acoustic, jazz) and heavy genres (e.g. metal, punk, hard rock, grunge). If moving between these types, you MUST select a medium genre song (e.g. pop, rock, indie, electronic) to bridge the transition.
-      2. Keep similar tempos when appropriate.
-      3. The user's requested mood "${state.mood === 'custom' ? state.customMoodPrompt : state.mood}" is the ABSOLUTE PRIMARY factor. Prioritize candidates whose analyzed Mood matches or fits this requested mood above all else. BPM matching and Key matching are secondary criteria to be used only for fine-tuning smooth transitions.
-      
-      Candidate Pool:
-      ${selectedPool.map((c, i) => `${i}. Path: "${c.path}", Title: "${c.title}", Artist: "${c.artist}", Genre: "${c.genre}", BPM: ${c.bpm || 'unknown'}, Key: "${c.key || 'unknown'}", Mood: "${c.mood || 'unknown'}"`).join('\n')}
-      
-      Respond ONLY in raw JSON format with this structure:
-      {"path": "selected path", "reason": "DJ transition announcement (max 20 words)"}<end_of_turn>\n<start_of_turn>model\n`;
+      if (selectedPool.length > 0) {
+        const result = await sendWorkerRequest('select-next-track', {
+          mood: state.mood,
+          customMoodPrompt: state.customMoodPrompt,
+          currentTrack: state.currentTrack,
+          currentBpm,
+          currentGenre,
+          currentKey,
+          selectedPool
+        });
 
-      const output = await generator(prompt, {
-        max_new_tokens: 120,
-        temperature: 0.3,
-        return_full_text: false
-      });
-
-      const generatedText = output[0].generated_text;
-      const parsed = parseLLMJSON(generatedText);
-      
-      const chosenTrack = state.library.find(t => t.path === parsed.path);
-      if (chosenTrack) {
-        logConsole(`Gemma DJ selected: "${chosenTrack.title}" by ${chosenTrack.artist}`, 'ai');
-        logConsole(`Gemma Reason: "${parsed.reason}"`, 'ai');
-        return {
-          path: chosenTrack.path,
-          reason: parsed.reason
-        };
+        const parsed = parseLLMJSON(result.generatedText);
+        const chosenTrack = state.library.find(t => t.path === parsed.path);
+        
+        if (chosenTrack) {
+          logConsole(`Gemma DJ selected: "${chosenTrack.title}" by ${chosenTrack.artist}`, 'ai');
+          logConsole(`Gemma Reason: "${parsed.reason}"`, 'ai');
+          return {
+            path: chosenTrack.path,
+            reason: parsed.reason
+          };
+        }
       }
     } catch (e) {
       logConsole(`Gemma DJ selection failed: ${e.message}. Using rule fallback.`, 'warning');
@@ -992,7 +1020,6 @@ async function getNextDJTrack() {
 
   // 2. Heuristic Rule Engine
   const scoredCandidates = candidates.map(c => {
-    // Add a random noise factor (0-30) to ensure a different randomized set of candidates is chosen each time
     const noise = Math.random() * 30;
     return {
       track: c,
@@ -1002,7 +1029,6 @@ async function getNextDJTrack() {
 
   scoredCandidates.sort((a, b) => b.score - a.score);
   
-  // Pick randomly from the top 5 compatible candidates to ensure random playback order
   const poolSize = Math.min(5, scoredCandidates.length);
   const candidatePool = scoredCandidates.slice(0, poolSize);
   const chosenIndex = Math.floor(Math.random() * candidatePool.length);
@@ -1018,7 +1044,7 @@ async function getNextDJTrack() {
     }
   }
 
-  logConsole(`Heuristic DJ selected: "${best.title}" by ${best.artist} (Score: ${candidatePool[chosenIndex].score})`, 'system');
+  logConsole(`Heuristic DJ selected: "${best.title}" by ${best.artist} (Score: ${candidatePool[chosenIndex].score.toFixed(1)})`, 'system');
   return {
     path: best.path,
     reason: reason
@@ -1036,13 +1062,11 @@ function getHeuristicScore(track, currentBpm, currentGenre, currentKey) {
     promptWords.forEach(w => {
       if (w.length > 2 && searchArea.includes(w)) matches++;
     });
-    score += matches * 100; // Strong primary boost for custom prompts
+    score += matches * 100;
   } else {
-    // Exact mood tag match
     if (track.mood && track.mood.toLowerCase() === state.mood.toLowerCase()) {
-      score += 200; // Primary factor: Exact mood match
+      score += 200;
     } else if (track.mood) {
-      // Related mood descriptors
       const tMood = track.mood.toLowerCase();
       if (state.mood === 'energy' && (tMood.includes('energetic') || tMood.includes('upbeat') || tMood.includes('fast') || tMood.includes('intense') || tMood.includes('heavy'))) {
         score += 150;
@@ -1055,30 +1079,27 @@ function getHeuristicScore(track, currentBpm, currentGenre, currentKey) {
       }
     }
 
-    // Target Genres for the selected mood
     const profile = moodProfiles[state.mood];
     if (profile) {
       const trackGenre = track.genre.toLowerCase();
       const genreMatch = profile.targetGenres.some(tg => trackGenre.includes(tg));
-      if (genreMatch) score += 50; // Genre vibe match is a strong secondary factor
+      if (genreMatch) score += 50;
     }
   }
 
   // 2. Transitions, BPM, and Key (Secondary Factors)
   const profile = state.mood !== 'custom' ? moodProfiles[state.mood] : null;
   if (profile && track.bpm && track.bpm >= profile.bpmRange[0] && track.bpm <= profile.bpmRange[1]) {
-    score += 20; // Secondary factor: BPM is in the target mood range
+    score += 20;
   }
 
   if (state.currentTrack) {
-    // Jarring transition penalty (e.g. classical to heavy metal) remains high
     if (areGenresCompatible(currentGenre, track.genre)) {
       score += 10;
     } else {
-      score -= 100; // Heavy penalty to prevent jarring shifts
+      score -= 100;
     }
 
-    // Transition BPM alignment
     if (track.bpm) {
       const bpmDiff = Math.abs(track.bpm - currentBpm);
       if (bpmDiff < 10) score += 20;
@@ -1086,7 +1107,6 @@ function getHeuristicScore(track, currentBpm, currentGenre, currentKey) {
       else score -= 15;
     }
 
-    // Transition Key compatibility
     if (track.key && track.key === currentKey) {
       score += 10;
     }
@@ -1095,214 +1115,18 @@ function getHeuristicScore(track, currentBpm, currentGenre, currentKey) {
   return score;
 }
 
-// --- DJ Smooth Transition / Crossfading & Playback ---
-let crossfadeInterval = null;
-
-async function startCrossfade(nextTrack) {
-  if (state.isCrossfading) return;
-  state.isCrossfading = true;
-
-  logConsole(`DJ Transition: Crossfading into "${nextTrack.title}" by ${nextTrack.artist}...`, 'info');
-
-  // 1. Get BPM and offset for outgoing and incoming tracks
-  const currentTrack = state.currentTrack;
-  const currentBpm = currentTrack?.bpm || 100;
-  const currentOffset = currentTrack?.beatOffset || 0;
-  
-  let nextBpm = nextTrack.bpm || 100;
-  let nextOffset = nextTrack.beatOffset;
-  
-  if (nextOffset === undefined || nextOffset === null) {
-    logConsole(`On-the-fly audio analysis for "${nextTrack.title}"...`, 'info');
-    const analysis = await analyzeTrackAudio(nextTrack.path, nextBpm);
-    nextOffset = analysis.beatOffset;
-    nextTrack.beatOffset = nextOffset;
-    
-    // Save to library state
-    const libTrack = state.library.find(t => t.path === nextTrack.path);
-    if (libTrack) {
-      libTrack.beatOffset = nextOffset;
-      saveLibraryState();
-    }
-  }
-
-  // 2. Calculate tempo alignment (playbackRate)
-  const playbackRateIn = currentBpm / nextBpm;
-  const clampedPlaybackRateIn = Math.max(0.85, Math.min(1.15, playbackRateIn));
-  
-  logConsole(`Tempo matching: Outgoing BPM: ${currentBpm}, Incoming BPM: ${nextBpm}. Setting incoming playbackRate to ${clampedPlaybackRateIn.toFixed(3)}`, 'system');
-
-  // 3. Set up incoming player source and rate
-  const secureUrl = 'app-media:///' + nextTrack.path.replace(/\\/g, '/');
-  inactivePlayer.src = secureUrl;
-  inactivePlayer.playbackRate = clampedPlaybackRateIn;
-  inactivePlayer.volume = 0;
-
-  // Apply output device sinkId
-  if (state.outputDeviceId && typeof inactivePlayer.setSinkId === 'function') {
-    inactivePlayer.setSinkId(state.outputDeviceId).catch(err => console.error(err));
-  }
-
-  // 4. Calculate phase alignment (beat synchronization)
-  const tOut = activePlayer.currentTime;
-  const T_beat_in = 60 / nextBpm;
-  
-  const mod = (n, m) => ((n % m) + m) % m;
-  let startIn = mod(clampedPlaybackRateIn * (tOut - currentOffset) + nextOffset, T_beat_in);
-  
-  inactivePlayer.currentTime = startIn;
-  logConsole(`Beat matching: Cueing incoming track "${nextTrack.title}" at ${startIn.toFixed(3)}s to align with outgoing beat grid`, 'system');
-
-  // 5. Swap active and inactive players IMMEDIATELY so the UI and timelines track the incoming song!
-  const outgoingPlayer = activePlayer;
-  const incomingPlayer = inactivePlayer;
-  
-  activePlayer = incomingPlayer;
-  inactivePlayer = outgoingPlayer;
-
-  // 6. Update current track and now playing UI immediately!
-  state.currentTrack = nextTrack;
-  updateNowPlayingUI();
-
-  state.history.push({
-    path: nextTrack.path,
-    artist: nextTrack.artist,
-    playedAt: Date.now()
-  });
-  if (state.history.length > 100) state.history.shift();
-
-  if (state.isEnrichmentEnabled) {
-    enrichMetadata(nextTrack.artist, nextTrack.title);
-  }
-
-  // Handle 0s crossfade
-  if (state.crossfadeDuration === 0) {
-    inactivePlayer.pause();
-    inactivePlayer.currentTime = 0;
-    inactivePlayer.volume = 0;
-    inactivePlayer.playbackRate = 1.0;
-    
-    activePlayer.volume = state.masterVolume;
-    activePlayer.play().then(() => {
-      rampPlaybackRate(activePlayer, 1.0, 5000);
-      state.isCrossfading = false;
-      fillQueue();
-    }).catch(err => {
-      console.error(err);
-      state.isCrossfading = false;
-    });
-    return;
-  }
-
-  activePlayer.play().then(() => {
-    let elapsed = 0;
-    const intervalTime = 50; // 50ms steps
-    const totalSteps = (state.crossfadeDuration * 1000) / intervalTime;
-    
-    if (crossfadeInterval) clearInterval(crossfadeInterval);
-
-    crossfadeInterval = setInterval(() => {
-      elapsed++;
-      const ratio = elapsed / totalSteps;
-      
-      if (ratio >= 1) {
-        clearInterval(crossfadeInterval);
-        
-        inactivePlayer.pause();
-        inactivePlayer.currentTime = 0;
-        inactivePlayer.volume = 0;
-        inactivePlayer.playbackRate = 1.0; // Reset outgoing speed
-        
-        activePlayer.volume = state.masterVolume;
-        state.isCrossfading = false;
-        
-        rampPlaybackRate(activePlayer, 1.0, 5000); // drift back to normal speed
-        fillQueue();
-      } else {
-        // Fade activePlayer (incoming) in, inactivePlayer (outgoing) out
-        activePlayer.volume = ratio * state.masterVolume;
-        inactivePlayer.volume = (1 - ratio) * state.masterVolume;
-      }
-    }, intervalTime);
-  }).catch(err => {
-    logConsole(`Crossfade failed for "${nextTrack.title}" (Path: ${nextTrack.path}): ${err.message}. Hard switching...`, 'warning');
-    inactivePlayer.pause();
-    inactivePlayer.playbackRate = 1.0;
-    activePlayer.volume = state.masterVolume;
-    state.isCrossfading = false;
-    fillQueue();
-  });
-}
-
-function setUpAudioPlayer() {
-  const onTimeUpdate = (e) => {
-    const player = e.target;
-    if (player !== activePlayer || state.isDraggingSlider || player.seeking) return;
-    
-    if (isNaN(player.duration)) return;
-    
-    const progress = (player.currentTime / player.duration) * 100;
-    progressSlider.value = progress;
-    trackDurationCurrent.innerText = formatDuration(player.currentTime);
-    
-    // Check if we need to start crossfade at the end of the song
-    if (player.duration - player.currentTime <= state.crossfadeDuration && state.queue.length > 0) {
-      const nextItem = state.queue.shift();
-      const track = state.library.find(t => t.path === nextItem.path);
-      renderQueue();
-      startCrossfade(track);
-    }
-  };
-  
-  const onEnded = (e) => {
-    const player = e.target;
-    if (player !== activePlayer) return;
-    
-    // Fallback if crossfade didn't trigger
-    logConsole('Track finished. Transitioning...', 'info');
-    skipTrack();
-  };
-  
-  const onPlay = (e) => {
-    if (e.target !== activePlayer) return;
-    state.isPlaying = true;
-    vinylDisc.classList.add('playing');
-    vinylDisc.classList.remove('paused');
-    svgPlay.classList.add('hidden');
-    svgPause.classList.remove('hidden');
-    startSimulatedVisualizer();
-  };
-  
-  const onPause = (e) => {
-    if (e.target !== activePlayer) return;
-    state.isPlaying = false;
-    vinylDisc.classList.remove('playing');
-    vinylDisc.classList.add('paused');
-    svgPlay.classList.remove('hidden');
-    svgPause.classList.add('hidden');
-  };
-  
-  const onLoadedMetadata = (e) => {
-    if (e.target !== activePlayer) return;
-    trackDurationTotal.innerText = formatDuration(activePlayer.duration);
-  };
-
-  // Attach listeners to both dual audio elements
-  [audioPlayerA, audioPlayerB].forEach(player => {
-    player.addEventListener('timeupdate', onTimeUpdate);
-    player.addEventListener('ended', onEnded);
-    player.addEventListener('play', onPlay);
-    player.addEventListener('pause', onPause);
-    player.addEventListener('loadedmetadata', onLoadedMetadata);
-  });
-  
-  // controls
+// --- Player controls setup ---
+function setUpAudioPlayerControls() {
   btnPlay.addEventListener('click', () => {
     if (state.library.length === 0) {
       logConsole('No music in library. Please select a folder and scan first.', 'warning');
       return;
     }
-    togglePlayback();
+    if (!state.currentTrack) {
+      playNextFromQueue();
+    } else {
+      sendAudioCommand('toggle-playback');
+    }
   });
 
   btnNext.addEventListener('click', () => {
@@ -1310,15 +1134,14 @@ function setUpAudioPlayer() {
   });
 
   btnPrev.addEventListener('click', () => {
-    if (activePlayer.currentTime > 3 || state.history.length <= 1) {
-      activePlayer.currentTime = 0;
+    if (state.currentTime > 3 || state.history.length <= 1) {
+      sendAudioCommand('seek', { time: 0 });
     } else {
-      const last = state.history.pop(); // current track
-      const prev = state.history.pop(); // previous track
+      // Pop current and pop previous to play it
+      state.history.pop(); 
+      const prev = state.history.pop();
       if (prev) {
-        if (crossfadeInterval) clearInterval(crossfadeInterval);
         state.isCrossfading = false;
-        
         const track = state.library.find(t => t.path === prev.path);
         playTrack(track);
       }
@@ -1328,17 +1151,18 @@ function setUpAudioPlayer() {
   volumeSlider.addEventListener('input', (e) => {
     const vol = e.target.value / 100;
     state.masterVolume = vol;
-    
-    if (!state.isCrossfading) {
-      activePlayer.volume = vol;
-    }
+    sendAudioCommand('set-volume', { volume: vol });
     updateVolumeIcon(vol);
   });
 
   btnMute.addEventListener('click', () => {
-    activePlayer.muted = !activePlayer.muted;
-    inactivePlayer.muted = activePlayer.muted;
-    if (activePlayer.muted) {
+    // Mute/Unmute command triggers volume toggle in audio process
+    // Let's implement mute by sending a zero volume, or simple toggle mute
+    // Here we can just toggle muted state locally and send command
+    state.isMuted = !state.isMuted;
+    sendAudioCommand('set-volume', { volume: state.isMuted ? 0 : state.masterVolume });
+    
+    if (state.isMuted) {
       svgVolume.innerHTML = `<path d="M11 5 6 9H2v6h4l5 4V5zm2 5 4 4m0-4-4 4" stroke="currentColor" stroke-width="2"></path>`;
     } else {
       updateVolumeIcon(state.masterVolume);
@@ -1358,14 +1182,14 @@ function setUpAudioPlayer() {
   progressSlider.addEventListener('input', (e) => {
     if (!state.currentTrack || state.isCrossfading) return;
     state.isDraggingSlider = true;
-    const seekTime = (e.target.value / 100) * activePlayer.duration;
+    const seekTime = (e.target.value / 100) * state.duration;
     trackDurationCurrent.innerText = formatDuration(seekTime);
   });
 
   progressSlider.addEventListener('change', (e) => {
     if (!state.currentTrack || state.isCrossfading) return;
-    const seekTime = (e.target.value / 100) * activePlayer.duration;
-    activePlayer.currentTime = seekTime;
+    const seekTime = (e.target.value / 100) * state.duration;
+    sendAudioCommand('seek', { time: seekTime });
     state.isDraggingSlider = false;
   });
 }
@@ -1380,58 +1204,15 @@ function updateVolumeIcon(vol) {
   }
 }
 
-function togglePlayback() {
-  if (state.isPlaying) {
-    activePlayer.pause();
-  } else {
-    if (!state.currentTrack) {
-      playNextFromQueue();
-    } else {
-      activePlayer.play().catch(err => console.error(err));
-    }
-  }
-}
-
 async function playTrack(track) {
   if (!track) return;
   state.currentTrack = track;
-  
-  const secureUrl = 'app-media:///' + track.path.replace(/\\/g, '/');
-  
-  if (crossfadeInterval) clearInterval(crossfadeInterval);
   state.isCrossfading = false;
   
-  activePlayer.src = secureUrl;
-  activePlayer.playbackRate = 1.0;
-  activePlayer.volume = state.masterVolume;
-  
-  // Set output device if configured
-  if (state.outputDeviceId && typeof activePlayer.setSinkId === 'function') {
-    activePlayer.setSinkId(state.outputDeviceId).catch(err => console.error(err));
-  }
-  
-  state.history.push({
-    path: track.path,
-    artist: track.artist,
-    playedAt: Date.now()
-  });
-
-  if (state.history.length > 100) {
-    state.history.shift();
-  }
-
+  // Instruct audio process to play
+  sendAudioCommand('play-track', { track });
   updateNowPlayingUI();
   
-  try {
-    await activePlayer.play();
-  } catch (err) {
-    logConsole(`Playback error for "${track.title}" (Path: ${track.path}): ${err.message}`, 'danger');
-  }
-
-  if (state.isEnrichmentEnabled) {
-    enrichMetadata(track.artist, track.title);
-  }
-
   await fillQueue();
 }
 
@@ -1452,9 +1233,8 @@ async function skipTrack() {
     const track = state.library.find(t => t.path === nextItem.path);
     renderQueue();
     
-    // Crossfade smoothly into the skipped track!
     if (state.currentTrack && state.isPlaying) {
-      startCrossfade(track);
+      sendAudioCommand('start-crossfade', { nextTrack: track });
     } else {
       await playTrack(track);
     }
@@ -1800,4 +1580,22 @@ function renderQueue() {
     
     comingUpList.appendChild(div);
   });
+}
+
+function updateAIStatusUI() {
+  aiStatusBadge.className = `ai-status-badge ${state.ollamaStatus}`;
+  
+  if (state.ollamaStatus === 'connected') {
+    aiStatusText.innerText = 'Active';
+    aiModelName.innerText = state.ollamaModel;
+  } else if (state.ollamaStatus === 'checking') {
+    aiStatusText.innerText = 'Loading...';
+    aiModelName.innerText = 'Initializing Model...';
+  } else if (state.ollamaStatus === 'fallback') {
+    aiStatusText.innerText = 'Heuristics';
+    aiModelName.innerText = 'Rule-based Heuristics';
+  } else {
+    aiStatusText.innerText = 'Offline';
+    aiModelName.innerText = 'Local Heuristics';
+  }
 }

@@ -19,7 +19,29 @@ protocol.registerSchemesAsPrivileged([
   }
 ]);
 
+// Configure custom userData path to store IndexedDB in AppData\Local\YourOwnPersonalDJ\
+const dbDir = process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'YourOwnPersonalDJ') : path.join(app.getPath('userData'), 'YourOwnPersonalDJ');
+if (!fs.existsSync(dbDir)) {
+  fs.mkdirSync(dbDir, { recursive: true });
+}
+app.setPath('userData', dbDir);
+const libraryCachePath = path.join(dbDir, 'library.md');
+
 let mainWindow;
+let audioWindow;
+
+function createAudioWindow() {
+  audioWindow = new BrowserWindow({
+    show: false, // Keep it invisible
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+
+  audioWindow.loadFile('audio.html');
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -116,9 +138,13 @@ app.whenReady().then(() => {
   });
 
   createWindow();
+  createAudioWindow();
 
   app.on('activate', function () {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+      createAudioWindow();
+    }
   });
 });
 
@@ -136,6 +162,20 @@ process.on('SIGINT', () => {
 
 process.on('SIGTERM', () => {
   app.exit(0);
+});
+
+// Broker to forward commands from GUI window to Audio window
+ipcMain.on('to-audio-player', (event, data) => {
+  if (audioWindow && !audioWindow.isDestroyed()) {
+    audioWindow.webContents.send('audio-player-command', data);
+  }
+});
+
+// Broker to forward events from Audio window to GUI window
+ipcMain.on('from-audio-player', (event, data) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('audio-player-event', data);
+  }
 });
 
 // Native Directory Picker
@@ -423,33 +463,21 @@ function markdownToLibrary(mdString) {
   return { folders, library };
 }
 
-// AppData Local location for library.md
-const dbDir = process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'YourOwnPersonalDJ') : path.join(app.getPath('userData'), 'YourOwnPersonalDJ');
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
-}
-const libraryCachePath = path.join(dbDir, 'library.md');
-
-ipcMain.handle('save-library', async (event, library) => {
-  try {
-    const markdownContent = libraryToMarkdown(library);
-    await fs.promises.writeFile(libraryCachePath, markdownContent, 'utf8');
-    return { success: true };
-  } catch (err) {
-    console.error('Error saving library cache to Markdown:', err);
-    return { success: false, error: err.message };
-  }
-});
-
 ipcMain.handle('load-library', async () => {
   try {
     if (fs.existsSync(libraryCachePath)) {
       const content = await fs.promises.readFile(libraryCachePath, 'utf8');
-      return markdownToLibrary(content);
+      const data = markdownToLibrary(content);
+      
+      // Rename library.md to library.md.migrated
+      const migratedPath = libraryCachePath + '.migrated';
+      fs.renameSync(libraryCachePath, migratedPath);
+      console.log('Successfully read library.md and renamed it to library.md.migrated.');
+      return data;
     }
     return null;
   } catch (err) {
-    console.error('Error loading library cache from Markdown:', err);
+    console.error('Error loading library cache from Markdown for migration:', err);
     return null;
   }
 });

@@ -7,6 +7,12 @@ contextBridge.exposeInMainWorld('api', {
   onScanProgress: (callback) => ipcRenderer.on('scan-progress', (event, data) => callback(data)),
   onScanComplete: (callback) => ipcRenderer.on('scan-complete', (event, data) => callback(data)),
   getSystemMusicFolder: () => ipcRenderer.invoke('get-system-music-folder'),
-  saveLibrary: (library) => ipcRenderer.invoke('save-library', library),
-  loadLibrary: () => ipcRenderer.invoke('load-library')
+  loadLibrary: () => ipcRenderer.invoke('load-library'),
+  
+  // Audio Process Communication Bridge
+  sendToAudio: (data) => ipcRenderer.send('to-audio-player', data),
+  onAudioCommand: (callback) => ipcRenderer.on('audio-player-command', (event, data) => callback(data)),
+  
+  sendFromAudio: (data) => ipcRenderer.send('from-audio-player', data),
+  onAudioEvent: (callback) => ipcRenderer.on('audio-player-event', (event, data) => callback(data))
 });
