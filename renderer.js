@@ -213,12 +213,12 @@ let aiWorker = null;
 const pendingWorkerRequests = new Map();
 let workerRequestId = 0;
 
-function initAIWorker() {
+async function initAIWorker() {
   state.ollamaStatus = 'checking';
   updateAIStatusUI();
   logConsole('Initializing local AI Web Worker thread...', 'system');
 
-  aiWorker = new Worker('ai-worker.js', { type: 'module' });
+  aiWorker = new Worker('ai-worker.js?v=' + Date.now(), { type: 'module' });
 
   aiWorker.onmessage = (event) => {
     const { type, id, data, error } = event.data;
@@ -254,7 +254,15 @@ function initAIWorker() {
     logConsole(`AI Web Worker Error: ${err.message}`, 'danger');
   };
 
-  sendWorkerRequest('init');
+  try {
+    const modelStatus = await window.api.checkModelStatus();
+    sendWorkerRequest('init', { 
+      localModelPath: modelStatus.downloaded ? modelStatus.path : null
+    });
+  } catch (err) {
+    console.error('Failed checking local model status:', err);
+    sendWorkerRequest('init');
+  }
 }
 
 function sendWorkerRequest(action, payload = {}) {
@@ -266,19 +274,8 @@ function sendWorkerRequest(action, payload = {}) {
 }
 
 // --- Audio Process Communication Manager ---
-const pendingAudioRequests = new Map();
-let audioRequestId = 0;
-
 function sendAudioCommand(command, payload = {}) {
   window.api.sendToAudio({ command, payload });
-}
-
-function sendAudioRequest(command, payload = {}) {
-  return new Promise((resolve, reject) => {
-    const id = ++audioRequestId;
-    pendingAudioRequests.set(id, { resolve, reject });
-    window.api.sendToAudio({ command, payload: { ...payload, requestId: id } });
-  });
 }
 
 function setupAudioEvents() {
@@ -332,28 +329,6 @@ function setupAudioEvents() {
 
       case 'crossfade-end':
         handleCrossfadeEnd();
-        break;
-
-      case 'transients-analyzed':
-        if (payload.requestId) {
-          const pending = pendingAudioRequests.get(payload.requestId);
-          if (pending) {
-            pendingAudioRequests.delete(payload.requestId);
-            if (payload.error) {
-              pending.reject(new Error(payload.error));
-            } else {
-              pending.resolve(payload);
-            }
-          }
-        } else {
-          // On-the-fly analysis from audio window. Update database!
-          const track = state.library.find(t => t.path === payload.path);
-          if (track) {
-            track.beatOffset = payload.beatOffset;
-            dbSaveTrack(track);
-            logConsole(`Saved on-the-fly analysis for "${track.title}": beatOffset = ${payload.beatOffset}`, 'success');
-          }
-        }
         break;
 
       case 'log':
@@ -504,10 +479,81 @@ function setUpSettings() {
   btnSettings.addEventListener('click', () => {
     settingsModal.classList.remove('hidden');
     updateOutputDevices();
+    updateModelStatusUI();
   });
   
   btnSettingsClose.addEventListener('click', () => {
     settingsModal.classList.add('hidden');
+  });
+
+  // Close modal when clicking on the overlay backdrop
+  settingsModal.addEventListener('click', (e) => {
+    if (e.target === settingsModal) {
+      settingsModal.classList.add('hidden');
+    }
+  });
+
+  // Model Download Interaction Handling
+  const btnDownloadModel = document.getElementById('btn-download-model');
+  const downloadProgressContainer = document.getElementById('model-download-progress-container');
+  const downloadStatusText = document.getElementById('model-download-status');
+  const downloadPercentageText = document.getElementById('model-download-percentage');
+  const downloadBarFill = document.getElementById('model-download-bar');
+
+  btnDownloadModel.addEventListener('click', async () => {
+    btnDownloadModel.setAttribute('disabled', 'true');
+    btnDownloadModel.innerText = 'Downloading...';
+    downloadProgressContainer.classList.remove('hidden');
+    const errorMsgEl = document.getElementById('model-download-error-msg');
+    if (errorMsgEl) {
+      errorMsgEl.classList.add('hidden');
+    }
+    
+    const result = await window.api.downloadModel();
+    
+    btnDownloadModel.removeAttribute('disabled');
+    updateModelStatusUI();
+    
+    if (result.success) {
+      downloadStatusText.innerText = 'Download Complete!';
+      downloadPercentageText.innerText = '100%';
+      downloadBarFill.style.width = '100%';
+      logConsole('Gemma local model downloaded successfully. Reinitializing AI Web Worker...', 'success');
+      
+      // Reinitialize the worker with local path
+      if (aiWorker) {
+        aiWorker.terminate();
+      }
+      initAIWorker();
+      
+      setTimeout(() => {
+        downloadProgressContainer.classList.add('hidden');
+      }, 5000);
+    } else {
+      downloadStatusText.innerText = 'Download Failed!';
+      if (errorMsgEl) {
+        errorMsgEl.innerHTML = `<strong>Error:</strong> ${result.error.replace(/\n/g, '<br>')}`;
+        errorMsgEl.classList.remove('hidden');
+      }
+    }
+  });
+
+  // Progress events from IPC
+  window.api.onModelDownloadStart(({ totalFiles }) => {
+    downloadStatusText.innerText = `Starting download (0/${totalFiles} files)...`;
+    downloadPercentageText.innerText = '0%';
+    downloadBarFill.style.width = '0%';
+  });
+
+  window.api.onModelDownloadProgress(({ file, downloadedBytes, totalBytes, percent, filesCompleted, totalFiles }) => {
+    const mbDownloaded = (downloadedBytes / (1024 * 1024)).toFixed(1);
+    const mbTotal = (totalBytes / (1024 * 1024)).toFixed(1);
+    
+    downloadStatusText.innerText = `[${filesCompleted + 1}/${totalFiles}] ${file} (${mbDownloaded}/${mbTotal} MB)`;
+    
+    const overallPercent = Math.round(((filesCompleted + (percent / 100)) / totalFiles) * 100);
+    downloadPercentageText.innerText = `${overallPercent}%`;
+    downloadBarFill.style.width = `${overallPercent}%`;
   });
 
   crossfadeSlider.addEventListener('input', (e) => {
@@ -522,6 +568,32 @@ function setUpSettings() {
     state.outputDeviceId = deviceId;
     sendAudioCommand('set-output-device', { deviceId });
   });
+}
+
+async function updateModelStatusUI() {
+  try {
+    const status = await window.api.checkModelStatus();
+    const badge = document.getElementById('model-status-badge');
+    const btn = document.getElementById('btn-download-model');
+    
+    if (!badge || !btn) return;
+    
+    if (status.downloaded) {
+      badge.innerText = 'Downloaded';
+      badge.style.background = 'rgba(16, 185, 129, 0.15)';
+      badge.style.color = 'var(--success)';
+      badge.style.borderColor = 'rgba(16, 185, 129, 0.2)';
+      btn.innerText = 'Redownload Model';
+    } else {
+      badge.innerText = 'Not Downloaded';
+      badge.style.background = 'rgba(239, 68, 68, 0.15)';
+      badge.style.color = '#ef4444';
+      badge.style.borderColor = 'rgba(239, 68, 68, 0.2)';
+      btn.innerText = 'Download Model Files';
+    }
+  } catch (err) {
+    console.error('Error updating model status UI:', err);
+  }
 }
 
 async function updateOutputDevices() {
@@ -792,7 +864,7 @@ async function backgroundMetadataProcessor() {
   if (beatOffset === undefined || beatOffset === null) {
     logConsole(`Analyzing audio transients for "${track.title}"...`, 'info');
     try {
-      const audioAnalysis = await sendAudioRequest('analyze-transients', { path: track.path, bpm });
+      const audioAnalysis = await runTransientAnalysis(track.path, bpm);
       beatOffset = audioAnalysis.beatOffset;
       if (audioAnalysis.bpm && (!track.bpm || track.bpm === 100)) {
         bpm = audioAnalysis.bpm;
@@ -816,7 +888,12 @@ async function backgroundMetadataProcessor() {
     if (res.success) {
       logConsole(`Successfully wrote ID3 tags to file: ${track.title}`, 'success');
     } else {
-      logConsole(`Failed to write tags: ${res.error}`, 'warning');
+      const isLocked = res.code === 'EBADF' || res.code === 'EBUSY' || res.code === 'EPERM' || (res.error && res.error.includes('descriptor'));
+      if (isLocked) {
+        logConsole(`Could not write ID3 tags directly (file is currently in use/playing): ${track.title}`, 'info');
+      } else {
+        logConsole(`Failed to write tags: ${res.error}`, 'warning');
+      }
     }
   }
 
@@ -1598,4 +1675,128 @@ function updateAIStatusUI() {
     aiStatusText.innerText = 'Offline';
     aiModelName.innerText = 'Local Heuristics';
   }
+}
+
+// Transient detection helper
+async function runTransientAnalysis(trackPath, knownBpm) {
+  const secureUrl = 'app-media:///' + trackPath.replace(/\\/g, '/');
+  const response = await fetch(secureUrl);
+  if (!response.ok) throw new Error(`Fetch failed with status ${response.status}`);
+  
+  const arrayBuffer = await response.arrayBuffer();
+  const ctx = new (window.OfflineAudioContext || window.AudioContext)(1, 44100, 44100);
+  const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+  
+  const sampleRate = audioBuffer.sampleRate;
+  const channelData = audioBuffer.getChannelData(0);
+  const duration = Math.min(audioBuffer.duration, 30);
+  
+  const stepSeconds = 0.01;
+  const stepSamples = Math.floor(sampleRate * stepSeconds);
+  const numSteps = Math.floor(duration / stepSeconds);
+  
+  const envelope = new Float32Array(numSteps);
+  for (let i = 0; i < numSteps; i++) {
+    const startSample = i * stepSamples;
+    let sum = 0;
+    const endSample = Math.min(startSample + stepSamples, channelData.length);
+    for (let j = startSample; j < endSample; j++) {
+      sum += Math.abs(channelData[j]);
+    }
+    envelope[i] = sum / (endSample - startSample || 1);
+  }
+  
+  const peakTimes = [];
+  const peakAmplitudes = [];
+  const movingAverageWindow = 15;
+  
+  for (let i = movingAverageWindow; i < numSteps - movingAverageWindow; i++) {
+    let localSum = 0;
+    for (let j = i - movingAverageWindow; j <= i + movingAverageWindow; j++) {
+      localSum += envelope[j];
+    }
+    const localAvg = localSum / (2 * movingAverageWindow + 1);
+    
+    if (envelope[i] > localAvg * 1.3 && 
+        envelope[i] > envelope[i - 1] && 
+        envelope[i] > envelope[i + 1] &&
+        envelope[i] > envelope[i - 2] &&
+        envelope[i] > envelope[i + 2]) {
+      peakTimes.push(i * stepSeconds);
+      peakAmplitudes.push(envelope[i]);
+    }
+  }
+  
+  if (peakTimes.length === 0) {
+    return { bpm: knownBpm || 100, beatOffset: 0 };
+  }
+  
+  let bpm = knownBpm;
+  if (!bpm) {
+    const intervals = [];
+    for (let i = 0; i < peakTimes.length; i++) {
+      for (let j = i + 1; j < Math.min(i + 10, peakTimes.length); j++) {
+        const interval = peakTimes[j] - peakTimes[i];
+        if (interval >= 0.3 && interval <= 1.2) {
+          intervals.push(interval);
+        }
+      }
+    }
+    
+    if (intervals.length > 0) {
+      const bpmCandidates = intervals.map(inv => 60 / inv);
+      let bestBpm = 100;
+      let maxCount = 0;
+      
+      for (let targetBpm = 60; targetBpm <= 180; targetBpm++) {
+        let count = 0;
+        for (const cand of bpmCandidates) {
+          if (Math.abs(cand - targetBpm) <= 1.5) {
+            count++;
+          }
+          if (Math.abs(cand * 2 - targetBpm) <= 1.5) {
+            count += 0.5;
+          }
+          if (Math.abs(cand / 2 - targetBpm) <= 1.5) {
+            count += 0.5;
+          }
+        }
+        if (count > maxCount) {
+          maxCount = count;
+          bestBpm = targetBpm;
+        }
+      }
+      bpm = bestBpm;
+    } else {
+      bpm = 100;
+    }
+  }
+  
+  const T = 60 / bpm;
+  let bestOffset = 0;
+  let maxScore = -1;
+  const numCandidates = 100;
+  const sigma = 0.03;
+  
+  for (let c = 0; c < numCandidates; c++) {
+    const candidateOffset = (c / numCandidates) * T;
+    let score = 0;
+    
+    for (let p = 0; p < peakTimes.length; p++) {
+      const peakTime = peakTimes[p];
+      const amp = peakAmplitudes[p];
+      
+      const rem = (peakTime - candidateOffset) % T;
+      const dist = Math.min(Math.abs(rem), T - Math.abs(rem));
+      
+      score += amp * Math.exp(-(dist * dist) / (2 * sigma * sigma));
+    }
+    
+    if (score > maxScore) {
+      maxScore = score;
+      bestOffset = candidateOffset;
+    }
+  }
+  
+  return { bpm, beatOffset: parseFloat(bestOffset.toFixed(3)) };
 }

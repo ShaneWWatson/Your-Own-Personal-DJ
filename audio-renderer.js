@@ -105,10 +105,6 @@ window.api.onAudioCommand(async (data) => {
     case 'stop':
       stopPlayback();
       break;
-
-    case 'analyze-transients':
-      analyzeTransients(payload.path, payload.bpm, payload.requestId);
-      break;
   }
 });
 
@@ -189,7 +185,7 @@ function stopPlayback() {
 }
 
 // DJ Smooth Transition / Crossfading & Playback
-async function startCrossfade(nextTrack) {
+function startCrossfade(nextTrack) {
   if (isCrossfading) return;
   isCrossfading = true;
   crossfadeTriggered = false;
@@ -202,24 +198,8 @@ async function startCrossfade(nextTrack) {
   let nextBpm = nextTrack.bpm || 100;
   let nextOffset = nextTrack.beatOffset;
 
-  // Run on-the-fly analysis if transient metrics are missing
   if (nextOffset === undefined || nextOffset === null) {
-    sendEvent('log', { message: `On-the-fly audio analysis for "${nextTrack.title}"...`, type: 'info' });
-    try {
-      const analysis = await runTransientAnalysis(nextTrack.path, nextBpm);
-      nextOffset = analysis.beatOffset;
-      nextTrack.beatOffset = nextOffset;
-      
-      // Notify UI thread to update database
-      sendEvent('transients-analyzed', {
-        path: nextTrack.path,
-        bpm: analysis.bpm,
-        beatOffset: analysis.beatOffset
-      });
-    } catch (err) {
-      console.error('On-the-fly analysis failed:', err);
-      nextOffset = 0;
-    }
+    nextOffset = 0;
   }
   
   // Calculate tempo alignment (playbackRate)
@@ -347,144 +327,4 @@ function rampPlaybackRate(player, targetRate, durationMs) {
       player.playbackRate = startRate + (targetRate - startRate) * ratio;
     }
   }, stepTime);
-}
-
-// Transient detection helper
-async function runTransientAnalysis(trackPath, knownBpm) {
-  const secureUrl = 'app-media:///' + trackPath.replace(/\\/g, '/');
-  const response = await fetch(secureUrl);
-  if (!response.ok) throw new Error(`Fetch failed with status ${response.status}`);
-  
-  const arrayBuffer = await response.arrayBuffer();
-  const ctx = new (window.OfflineAudioContext || window.AudioContext)(1, 44100, 44100);
-  const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
-  
-  const sampleRate = audioBuffer.sampleRate;
-  const channelData = audioBuffer.getChannelData(0);
-  const duration = Math.min(audioBuffer.duration, 30);
-  
-  const stepSeconds = 0.01;
-  const stepSamples = Math.floor(sampleRate * stepSeconds);
-  const numSteps = Math.floor(duration / stepSeconds);
-  
-  const envelope = new Float32Array(numSteps);
-  for (let i = 0; i < numSteps; i++) {
-    const startSample = i * stepSamples;
-    let sum = 0;
-    const endSample = Math.min(startSample + stepSamples, channelData.length);
-    for (let j = startSample; j < endSample; j++) {
-      sum += Math.abs(channelData[j]);
-    }
-    envelope[i] = sum / (endSample - startSample || 1);
-  }
-  
-  const peakTimes = [];
-  const peakAmplitudes = [];
-  const movingAverageWindow = 15;
-  
-  for (let i = movingAverageWindow; i < numSteps - movingAverageWindow; i++) {
-    let localSum = 0;
-    for (let j = i - movingAverageWindow; j <= i + movingAverageWindow; j++) {
-      localSum += envelope[j];
-    }
-    const localAvg = localSum / (2 * movingAverageWindow + 1);
-    
-    if (envelope[i] > localAvg * 1.3 && 
-        envelope[i] > envelope[i - 1] && 
-        envelope[i] > envelope[i + 1] &&
-        envelope[i] > envelope[i - 2] &&
-        envelope[i] > envelope[i + 2]) {
-      peakTimes.push(i * stepSeconds);
-      peakAmplitudes.push(envelope[i]);
-    }
-  }
-  
-  if (peakTimes.length === 0) {
-    return { bpm: knownBpm || 100, beatOffset: 0 };
-  }
-  
-  let bpm = knownBpm;
-  if (!bpm) {
-    const intervals = [];
-    for (let i = 0; i < peakTimes.length; i++) {
-      for (let j = i + 1; j < Math.min(i + 10, peakTimes.length); j++) {
-        const interval = peakTimes[j] - peakTimes[i];
-        if (interval >= 0.3 && interval <= 1.2) {
-          intervals.push(interval);
-        }
-      }
-    }
-    
-    if (intervals.length > 0) {
-      const bpmCandidates = intervals.map(inv => 60 / inv);
-      let bestBpm = 100;
-      let maxCount = 0;
-      
-      for (let targetBpm = 60; targetBpm <= 180; targetBpm++) {
-        let count = 0;
-        for (const cand of bpmCandidates) {
-          if (Math.abs(cand - targetBpm) <= 1.5) {
-            count++;
-          }
-          if (Math.abs(cand * 2 - targetBpm) <= 1.5) {
-            count += 0.5;
-          }
-          if (Math.abs(cand / 2 - targetBpm) <= 1.5) {
-            count += 0.5;
-          }
-        }
-        if (count > maxCount) {
-          maxCount = count;
-          bestBpm = targetBpm;
-        }
-      }
-      bpm = bestBpm;
-    } else {
-      bpm = 100;
-    }
-  }
-  
-  const T = 60 / bpm;
-  let bestOffset = 0;
-  let maxScore = -1;
-  const numCandidates = 100;
-  const sigma = 0.03;
-  
-  for (let c = 0; c < numCandidates; c++) {
-    const candidateOffset = (c / numCandidates) * T;
-    let score = 0;
-    
-    for (let p = 0; p < peakTimes.length; p++) {
-      const peakTime = peakTimes[p];
-      const amp = peakAmplitudes[p];
-      
-      const rem = (peakTime - candidateOffset) % T;
-      const dist = Math.min(Math.abs(rem), T - Math.abs(rem));
-      
-      score += amp * Math.exp(-(dist * dist) / (2 * sigma * sigma));
-    }
-    
-    if (score > maxScore) {
-      maxScore = score;
-      bestOffset = candidateOffset;
-    }
-  }
-  
-  return { bpm, beatOffset: parseFloat(bestOffset.toFixed(3)) };
-}
-
-// Background transient analysis trigger
-async function analyzeTransients(trackPath, knownBpm, requestId) {
-  try {
-    const analysis = await runTransientAnalysis(trackPath, knownBpm);
-    sendEvent('transients-analyzed', {
-      path: trackPath,
-      bpm: analysis.bpm,
-      beatOffset: analysis.beatOffset,
-      requestId
-    });
-  } catch (err) {
-    console.error('Error analyzing transients:', err);
-    sendEvent('transients-analyzed', { path: trackPath, bpm: knownBpm || 100, beatOffset: 0, error: err.message, requestId });
-  }
 }

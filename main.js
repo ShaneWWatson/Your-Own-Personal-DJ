@@ -13,6 +13,7 @@ protocol.registerSchemesAsPrivileged([
       standard: true,
       secure: true,
       supportFetchAPI: true,
+      corsEnabled: true,
       bypassCSP: true,
       stream: true
     }
@@ -40,7 +41,8 @@ function createAudioWindow() {
     }
   });
 
-  audioWindow.loadFile('audio.html');
+  const audioURL = url.pathToFileURL(path.join(__dirname, 'audio.html')).toString().replace('file:', 'app-media:');
+  audioWindow.loadURL(audioURL);
 }
 
 function createWindow() {
@@ -59,7 +61,15 @@ function createWindow() {
     autoHideMenuBar: true
   });
 
-  mainWindow.loadFile('index.html');
+  const indexURL = url.pathToFileURL(path.join(__dirname, 'index.html')).toString().replace('file:', 'app-media:');
+  mainWindow.loadURL(indexURL);
+
+  mainWindow.on('closed', () => {
+    if (audioWindow && !audioWindow.isDestroyed()) {
+      audioWindow.close();
+    }
+    app.quit();
+  });
 }
 
 // Register custom protocol for local media streaming
@@ -84,6 +94,8 @@ app.whenReady().then(() => {
         }
       }
       
+      console.log(`[app-media Request] Method: ${request.method}, URL: ${request.url} => Path: ${filePath}`);
+      
       if (!fs.existsSync(filePath)) {
         return new Response('File not found', { status: 404 });
       }
@@ -94,11 +106,25 @@ app.whenReady().then(() => {
       
       // Determine content type based on extension
       const ext = path.extname(filePath).toLowerCase();
-      let contentType = 'audio/mpeg';
-      if (ext === '.wav') contentType = 'audio/wav';
-      else if (ext === '.m4a') contentType = 'audio/mp4';
-      else if (ext === '.flac') contentType = 'audio/flac';
-      else if (ext === '.ogg') contentType = 'audio/ogg';
+      const mimeTypes = {
+        '.html': 'text/html',
+        '.css': 'text/css',
+        '.js': 'application/javascript',
+        '.mjs': 'application/javascript',
+        '.wasm': 'application/wasm',
+        '.json': 'application/json',
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.svg': 'image/svg+xml',
+        '.gif': 'image/gif',
+        '.mp3': 'audio/mpeg',
+        '.wav': 'audio/wav',
+        '.m4a': 'audio/mp4',
+        '.flac': 'audio/flac',
+        '.ogg': 'audio/ogg'
+      };
+      const contentType = mimeTypes[ext] || 'application/octet-stream';
       
       if (range) {
         // Parse Range: e.g. "bytes=32768-" or "bytes=32768-65536"
@@ -175,6 +201,17 @@ ipcMain.on('to-audio-player', (event, data) => {
 ipcMain.on('from-audio-player', (event, data) => {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('audio-player-event', data);
+  }
+});
+
+// Safe External Link Launcher
+ipcMain.on('open-external', (event, urlToOpen) => {
+  try {
+    if (urlToOpen && (urlToOpen.startsWith('http://') || urlToOpen.startsWith('https://'))) {
+      require('electron').shell.openExternal(urlToOpen);
+    }
+  } catch (err) {
+    console.error('Failed to open external URL:', err);
   }
 });
 
@@ -310,31 +347,42 @@ ipcMain.on('start-scan', async (event, folders) => {
 
 // ID3 tag writer (Specifically for MP3s)
 ipcMain.handle('write-tags', async (event, { filePath, bpm, key }) => {
-  try {
-    const ext = path.extname(filePath).toLowerCase();
-    if (ext !== '.mp3') {
-      return { success: false, error: 'Only MP3 files support direct ID3 tag writing in this version.' };
-    }
+  let attempts = 4;
+  let delay = 250; // ms
+  
+  while (attempts > 0) {
+    try {
+      const ext = path.extname(filePath).toLowerCase();
+      if (ext !== '.mp3') {
+        return { success: false, error: 'Only MP3 files support direct ID3 tag writing in this version.' };
+      }
 
-    const tags = {};
-    if (bpm !== undefined && bpm !== null) {
-      tags.BPM = bpm.toString();
-    }
-    if (key) {
-      tags.initialKey = key;
-    }
+      const tags = {};
+      if (bpm !== undefined && bpm !== null) {
+        tags.BPM = bpm.toString();
+      }
+      if (key) {
+        tags.initialKey = key;
+      }
 
-    const success = NodeID3.update(tags, filePath);
-    if (success === true) {
-      return { success: true };
-    } else if (success instanceof Error) {
-      return { success: false, error: success.message };
-    } else {
-      return { success: false, error: 'Unknown node-id3 write error' };
+      const success = NodeID3.update(tags, filePath);
+      if (success === true) {
+        return { success: true };
+      } else if (success instanceof Error) {
+        throw success;
+      } else {
+        throw new Error('Unknown node-id3 write error');
+      }
+    } catch (err) {
+      attempts--;
+      if (attempts === 0) {
+        console.error(`Error writing tags to ${filePath} after multiple retries:`, err);
+        return { success: false, error: err.message, code: err.code || err.errno };
+      }
+      // Wait before retrying
+      await new Promise(resolve => setTimeout(resolve, delay));
+      delay *= 2; // exponential backoff (250ms, 500ms, 1000ms)
     }
-  } catch (err) {
-    console.error(`Error writing tags to ${filePath}:`, err);
-    return { success: false, error: err.message };
   }
 });
 
@@ -474,10 +522,165 @@ ipcMain.handle('load-library', async () => {
       fs.renameSync(libraryCachePath, migratedPath);
       console.log('Successfully read library.md and renamed it to library.md.migrated.');
       return data;
+    } else {
+      const migratedPath = libraryCachePath + '.migrated';
+      if (fs.existsSync(migratedPath)) {
+        const content = await fs.promises.readFile(migratedPath, 'utf8');
+        const data = markdownToLibrary(content);
+        console.log('Successfully read library.md.migrated.');
+        return data;
+      }
     }
     return null;
   } catch (err) {
     console.error('Error loading library cache from Markdown for migration:', err);
     return null;
+  }
+});
+
+// Model Download & Status IPC Handlers
+ipcMain.handle('check-model-status', async () => {
+  try {
+    const modelId = 'onnx-community/gemma-3-1b-it-ONNX';
+    const modelsDir = path.join(dbDir, 'models', modelId);
+    
+    const configExists = fs.existsSync(path.join(modelsDir, 'config.json'));
+    const onnxExists = fs.existsSync(path.join(modelsDir, 'onnx', 'model_q4.onnx'));
+    
+    return {
+      downloaded: configExists && onnxExists,
+      path: path.join(dbDir, 'models')
+    };
+  } catch (err) {
+    return { downloaded: false };
+  }
+});
+
+ipcMain.handle('download-model', async (event) => {
+  try {
+    const modelId = 'onnx-community/gemma-3-1b-it-ONNX';
+    const modelsDir = path.join(dbDir, 'models', modelId);
+    
+    fs.mkdirSync(modelsDir, { recursive: true });
+    
+    // Fetch file list from Hugging Face Model API
+    const res = await fetch(`https://huggingface.co/api/models/${modelId}`);
+    
+    if (!res.ok) {
+      const errBody = await res.text();
+      let hfError = errBody;
+      try {
+        const errJson = JSON.parse(errBody);
+        hfError = errJson.error || errJson.message || errBody;
+      } catch (e) {}
+
+      // Write a diagnostics debug log
+      try {
+        const debugLogPath = path.join(dbDir, 'download-error-debug.txt');
+        const debugInfo = [
+          `Time: ${new Date().toISOString()}`,
+          `Model ID: ${modelId}`,
+          `Response Status: ${res.status}`,
+          `Response Status Text: ${res.statusText}`,
+          `Response Headers: ${JSON.stringify(Object.fromEntries(res.headers.entries()), null, 2)}`,
+          `Response Body: ${errBody}`
+        ].join('\n\n');
+        fs.writeFileSync(debugLogPath, debugInfo, 'utf8');
+      } catch (logErr) {
+        console.error('Failed writing download debug log:', logErr);
+      }
+
+      if (res.status === 401 || res.status === 403) {
+        throw new Error(`Access restricted: ${hfError}\n\nPlease check your internet connection or Hugging Face repository accessibility.`);
+      }
+      if (res.status === 404) {
+        throw new Error(`Model repository not found: ${hfError}\n\nPlease verify that the model repository 'onnx-community/gemma-3-1b-it-ONNX' is still hosted publicly on Hugging Face.`);
+      }
+      throw new Error(`Failed to fetch model info from Hugging Face (${res.status}): ${hfError}`);
+    }
+    
+    const data = await res.json();
+    const siblings = data.siblings || [];
+    const allFiles = siblings.map(s => s.rfilename).filter(Boolean);
+    
+    // Download config and tokenizer files
+    const jsonFiles = allFiles.filter(f => f.endsWith('.json') || f.endsWith('.txt') || f.endsWith('.jinja'));
+    
+    // Choose specific quantized model files (prefer model_q4, fallback to model_quantized)
+    let modelFiles = [];
+    if (allFiles.includes('onnx/model_q4.onnx')) {
+      modelFiles.push('onnx/model_q4.onnx');
+      if (allFiles.includes('onnx/model_q4.onnx_data')) {
+        modelFiles.push('onnx/model_q4.onnx_data');
+      }
+    } else if (allFiles.includes('onnx/model_quantized.onnx')) {
+      modelFiles.push('onnx/model_quantized.onnx');
+      if (allFiles.includes('onnx/model_quantized.onnx_data')) {
+        modelFiles.push('onnx/model_quantized.onnx_data');
+      }
+    } else {
+      modelFiles = allFiles.filter(f => f.endsWith('.onnx') || f.endsWith('.onnx_data'));
+    }
+    
+    const files = [...jsonFiles, ...modelFiles];
+      
+    if (files.length === 0) {
+      throw new Error("No model files found in the repository.");
+    }
+    
+    event.sender.send('model-download-start', { totalFiles: files.length });
+    
+    let filesCompleted = 0;
+    
+    for (const file of files) {
+      const fileUrl = `https://huggingface.co/${modelId}/resolve/main/${file}`;
+      const destPath = path.join(modelsDir, file);
+      
+      // Ensure target directory exists (e.g. modelsDir/onnx/)
+      fs.mkdirSync(path.dirname(destPath), { recursive: true });
+      
+      const fileRes = await fetch(fileUrl);
+      
+      if (!fileRes.ok) {
+        throw new Error(`Failed to download ${file}: ${fileRes.status} ${fileRes.statusText}`);
+      }
+      
+      const totalBytes = parseInt(fileRes.headers.get('content-length') || '0', 10);
+      let downloadedBytes = 0;
+      
+      const fileStream = fs.createWriteStream(destPath);
+      try {
+        const reader = fileRes.body.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          
+          fileStream.write(Buffer.from(value));
+          downloadedBytes += value.length;
+          
+          if (totalBytes > 0) {
+            const percent = Math.round((downloadedBytes / totalBytes) * 100);
+            event.sender.send('model-download-progress', {
+              file,
+              downloadedBytes,
+              totalBytes,
+              percent,
+              filesCompleted,
+              totalFiles: files.length
+            });
+          }
+        }
+      } finally {
+        fileStream.end();
+      }
+      
+      filesCompleted++;
+    }
+    
+    event.sender.send('model-download-complete');
+    return { success: true };
+  } catch (err) {
+    console.error('Model download error:', err);
+    return { success: false, error: err.message };
   }
 });

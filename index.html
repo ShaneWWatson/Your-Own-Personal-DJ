@@ -314,9 +314,9 @@
     </main>
   </div>
 
-  <!-- Settings Modal -->
-  <div id="settings-modal" class="popup hidden" style="bottom: auto; top: 50%; left: 50%; transform: translate(-50%, -50%); max-width: 450px; width: 90%;">
-    <div class="popup-content" style="flex-direction: column; align-items: stretch; gap: 20px; width: 100%;">
+  <!-- Settings Modal Overlay -->
+  <div id="settings-modal" class="modal-overlay hidden">
+    <div class="modal-content">
       <div style="display: flex; justify-content: space-between; align-items: center;">
         <h3 style="font-size: 1.2rem; font-weight: 700;">Settings</h3>
         <button id="btn-settings-close" class="btn-icon" title="Close Settings">
@@ -348,6 +348,35 @@
             <span id="crossfade-value" style="font-size: 0.85rem; font-family: var(--font-mono); color: var(--primary-hover);">6s</span>
           </div>
           <input type="range" id="crossfade-slider" min="0" max="15" value="6" style="width:100%; height:4px; border-radius:2px; background:rgba(255,255,255,0.1); -webkit-appearance:none; outline:none;">
+        </div>
+
+        <!-- Model Download Section -->
+        <div style="display: flex; flex-direction: column; gap: 8px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 14px; margin-top: 6px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <label style="font-size: 0.85rem; color: var(--text-muted);">Gemma AI Model (Local Offline)</label>
+            <span id="model-status-badge" class="badge bpm-badge" style="background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.2); font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; text-transform: uppercase;">Not Downloaded</span>
+          </div>
+          <p style="font-size: 0.75rem; color: var(--text-muted); line-height: 1.3;">
+            Downloading the model (~650 MB) stores it locally in AppData for offline use and faster startup.
+          </p>
+          <button id="btn-download-model" class="btn-secondary w-full" style="padding: 10px; font-size: 0.85rem; margin-top: 4px;">
+            Download Model Files
+          </button>
+          
+          <!-- Download Progress -->
+          <div id="model-download-progress-container" class="hidden" style="display: flex; flex-direction: column; gap: 6px; margin-top: 4px;">
+            <div style="display: flex; justify-content: space-between; font-size: 0.75rem;">
+              <span id="model-download-status" style="color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 70%;">Preparing...</span>
+              <span id="model-download-percentage" style="color: var(--secondary); font-weight: 700;">0%</span>
+            </div>
+            <div class="progress-bar-bg" style="height: 6px; background: rgba(255, 255, 255, 0.05); border-radius: 3px; overflow: hidden;">
+              <div id="model-download-bar" class="progress-bar-fill" style="width: 0%; height: 100%; background: linear-gradient(90deg, var(--primary) 0%, var(--secondary) 100%); border-radius: 3px;"></div>
+            </div>
+          </div>
+
+          <!-- Download Error Message -->
+          <div id="model-download-error-msg" class="hidden" style="font-size: 0.75rem; color: #ef4444; line-height: 1.4; margin-top: 8px; background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.15); padding: 10px; border-radius: 8px;">
+          </div>
         </div>
       </div>
     </div>

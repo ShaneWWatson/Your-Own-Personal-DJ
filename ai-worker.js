@@ -1,8 +1,8 @@
-import { pipeline } from './node_modules/@huggingface/transformers/dist/transformers.web.js';
+import { pipeline, env } from './node_modules/@huggingface/transformers/dist/transformers.js?v=2';
 
 let generator = null;
 let modelStatus = 'checking';
-let modelName = 'Gemma 2B (Local WebGPU)';
+let modelName = 'Gemma 3 1B (Local WebGPU)';
 
 // Helper to send status/logs back to the main UI
 function sendStatus(status, model, log, logType) {
@@ -12,15 +12,30 @@ function sendStatus(status, model, log, logType) {
   });
 }
 
-async function initLocalAI() {
+async function initLocalAI(localModelPath) {
+  if (localModelPath) {
+    let formattedPath = localModelPath.replace(/\\/g, '/');
+    if (formattedPath.startsWith('/')) {
+      formattedPath = formattedPath.slice(1);
+    }
+    env.remoteHost = `app-media:///${formattedPath}/`;
+    env.remotePathTemplate = '{model}/';
+    env.allowLocalModels = false;
+    
+    sendStatus('checking', 'Loading Local Weights...', 'Loading local Gemma model weights from AppData...', 'info');
+  } else {
+    env.remoteHost = 'https://huggingface.co/';
+    env.remotePathTemplate = '{model}/resolve/{revision}/';
+  }
   sendStatus('checking', 'Initializing Gemma Model...', 'Loading Transformers.js pipeline...', 'system');
 
   try {
-    const modelId = 'onnx-community/gemma-2-2b-it-ONNX-w4a16';
+    const modelId = 'onnx-community/gemma-3-1b-it-ONNX';
     sendStatus('checking', 'Loading Weights...', 'Loading local Gemma model weights (WebGPU)...', 'info');
 
     generator = await pipeline('text-generation', modelId, {
       device: 'webgpu',
+      dtype: 'q4',
       progress_callback: (data) => {
         if (data.status === 'downloading') {
           const percent = Math.round((data.loaded / data.total) * 100);
@@ -34,16 +49,17 @@ async function initLocalAI() {
     });
 
     modelStatus = 'connected';
-    modelName = 'Gemma 2B (Local WebGPU)';
+    modelName = 'Gemma 3 1B (Local WebGPU)';
     sendStatus('connected', modelName, 'Local Gemma model loaded and active using WebGPU acceleration!', 'success');
   } catch (err) {
     console.error('WebGPU loading failed, trying CPU WASM fallback:', err);
     sendStatus('checking', 'CPU Fallback...', `WebGPU failed: ${err.message}. Retrying with CPU WebAssembly...`, 'warning');
 
     try {
-      const modelId = 'onnx-community/gemma-2-2b-it-ONNX-w4a16';
+      const modelId = 'onnx-community/gemma-3-1b-it-ONNX';
       generator = await pipeline('text-generation', modelId, {
         device: 'wasm',
+        dtype: 'q4',
         progress_callback: (data) => {
           if (data.status === 'downloading') {
             const percent = Math.round((data.loaded / data.total) * 100);
@@ -54,7 +70,7 @@ async function initLocalAI() {
         }
       });
       modelStatus = 'connected';
-      modelName = 'Gemma 2B (Local CPU WASM)';
+      modelName = 'Gemma 3 1B (Local CPU WASM)';
       sendStatus('connected', modelName, 'Local Gemma model loaded successfully using CPU WASM fallback.', 'success');
     } catch (fallbackErr) {
       console.error('All local AI loaders failed:', fallbackErr);
@@ -69,7 +85,8 @@ self.onmessage = async (event) => {
   const { action, id, payload } = event.data;
 
   if (action === 'init') {
-    await initLocalAI();
+    const localModelPath = payload?.localModelPath || null;
+    await initLocalAI(localModelPath);
     postMessage({ id, data: { success: true } });
     return;
   }
