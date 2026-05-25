@@ -9,7 +9,7 @@ Your Own Personal DJ is a premium desktop audio player built on Electron and Web
 
 ## Key Features
 
-- **Local AI Vibe & Mood Analysis**: Uses a local **Gemma 2B** model running natively on your hardware (accelerated via WebGPU with WebAssembly CPU fallback) to estimate the BPM, musical Key, and Mood tags of your music library.
+- **Local AI Vibe & Mood Analysis**: Uses a local **Gemma 3 1B** model running natively on your hardware (accelerated via WebGPU with WebAssembly fallback) to estimate the BPM, musical Key, and Mood tags of your music library.
 - **Advanced Transient Downbeat Matching**: Analyzes the first 30 seconds of track audio on the fly using a Web Audio API absolute envelope peak-detector and a Gaussian grid-fitting algorithm to find the exact downbeat offset (`BeatOffset`) of the first major beat.
 - **Seamless DJ Transitions**:
   - **Tempo Matching**: Matches the tempo of the incoming song to the outgoing song by adjusting its playback speed (`playbackRate`) within a +/- 15% range.
@@ -37,7 +37,7 @@ Your Own Personal DJ is designed to keep your project files clean and adhere to 
 ## Disk Space & Resource Footprint
 
 - **Packaged Standalone Executable**: ~**180 MB** (contains the packaged Electron container, Node.js runtime, and compiled native modules).
-- **Local AI Model Cache**: ~**1.6 GB** (the pre-quantized Gemma 2B model weights file `onnx-community/gemma-2-2b-it-ONNX-w4a16` is downloaded upon first launch and cached under standard Hugging Face hubs or Chromium's Origin Private File System/Cache API).
+- **Local AI Model Cache**: ~**900 MB** (the pre-quantized Gemma 3 1B model weights file `onnx-community/gemma-3-1b-it-ONNX` is downloaded upon first launch and cached under standard Hugging Face hubs or Chromium's Origin Private File System/Cache API).
 - **Database Cache (`library.md`)**: Typically less than **1 MB** (scales with the size of your music catalog; holds textual paths, titles, genres, BPM, key, mood, and beat offsets).
 - **Hardware Resources**:
   - **GPU**: Utilizes WebGPU for local Gemma AI operations (falls back to WebAssembly CPU execution if no compatible GPU or browser interface is found).
@@ -92,7 +92,9 @@ YourOwnPersonalDJ/
 
 ---
 
-## Licensing
+## Licensing & Attributions
 
-- **Custom Application Source Code**: Licensed under the **MIT License** (Copyright &copy; 2026 Shane W Watson).
-- **Libraries & Dependencies**: All external open-source libraries (Electron, Chromium, transformers.js, music-metadata, node-id3, etc.) are credited with their corresponding licenses in the [LICENSES.chromium.html](file:///c:/Users/techn/OneDrive/Downloads/Documents/YourOwnPersonalDJ/LICENSES.chromium.html) file.
+- **Custom Application Source Code**: Licensed under the **MIT License** (see the root [LICENSE](LICENSE) file).
+- **Third-Party Software Components**: Detailed attributions are provided in the root [NOTICE](NOTICE) file. All external open-source libraries (Electron, Chromium, transformers.js, music-metadata, node-id3, etc.) are credited with their corresponding licenses in the [LICENSES.chromium.html](LICENSES.chromium.html) file.
+- **Gemma AI Model License**: **AI Model**: Gemma 3 (1B) licensed under [Google Gemma Terms of Use](https://ai.google.dev/gemma/terms)  
+  Users must comply with [Google's Prohibited Use Policy](https://ai.google.dev/gemma/prohibited_use_policy)

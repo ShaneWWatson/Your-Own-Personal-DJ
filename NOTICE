@@ -1,0 +1,31 @@
+Your Own Personal DJ
+Copyright (c) 2026 Shane W Watson
+
+This software includes components from the following open-source projects:
+
+- Hugging Face Transformers
+  License: Apache License 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
+  Project: https://github.com/huggingface/transformers.js
+
+- music-metadata
+  License: MIT License (https://opensource.org/licenses/MIT)
+  Project: https://github.com/Borewit/music-metadata
+
+- node-id3
+  License: ISC License (https://opensource.org/licenses/ISC)
+  Project: https://github.com/Zazama/node-id3
+
+- Electron
+  License: MIT License (https://opensource.org/licenses/MIT)
+  Project: https://github.com/electron/electron
+
+- electron-packager
+  License: BSD 2-Clause "Simplified" License (https://opensource.org/licenses/BSD-2-Clause)
+  Project: https://github.com/electron/electron-packager
+
+- Gemma 3 (1B) Model Weights
+  License: Google's Gemma Terms of Use (https://ai.google.dev/gemma/terms)
+  Prohibited Use Policy: https://ai.google.dev/gemma/prohibited_use_policy
+  Notice: This application uses the Gemma 3 (1B) model. By using this application, users must comply with all restrictions set forth in Google's Gemma Terms of Use and Prohibited Use Policy.
+
+For the full dependency tree and licenses, including Chromium components, please refer to the accompanying LICENSES.chromium.html file.
