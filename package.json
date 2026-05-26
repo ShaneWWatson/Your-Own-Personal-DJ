@@ -1,28 +1,33 @@
 {
   "name": "your-own-personal-dj",
   "version": "1.0.0",
-  "description": "A local DJ app that uses local AI to play music matching your mood.",
+  "description": "A local DJ app that uses Essentia.js audio analysis to play music matching your mood.",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "build": "electron-packager . \"Your Own Personal DJ\" --platform=win32 --arch=x64 --out=dist --overwrite"
   },
   "dependencies": {
-    "@huggingface/transformers": "^4.2.0",
+    "essentia.js": "^0.1.3",
     "music-metadata": "^11.12.3",
     "node-id3": "^0.2.9"
   },
   "devDependencies": {
-    "electron": "^42.2.0",
-    "electron-packager": "^17.1.2"
+    "@electron/packager": "^20.0.0",
+    "electron": "^42.2.0"
   },
   "keywords": [
     "music",
     "dj",
-    "gemma",
-    "local-ai",
+    "essentia",
+    "audio-analysis",
+    "bpm",
+    "key-detection",
     "electron"
   ],
   "author": "Shane W Watson",
-  "license": "MIT"
+  "license": "AGPL-3.0-or-later",
+  "engines": {
+    "node": ">=22.12.0"
+  }
 }

@@ -1,6 +1,6 @@
 # Your Own Personal DJ
 
-Your Own Personal DJ is a premium desktop audio player built on Electron and Web Audio APIs. It scans your local music folders, uses a locally running AI model to analyze track metadata (BPM, musical key, and mood), and acts as a virtual DJ by creating seamless, beatmatched transitions between songs in real time.
+Your Own Personal DJ is a premium desktop audio player built on Electron and the Web Audio API. It scans your local music folders, uses a locally running **Essentia.js** audio-analysis engine to measure each track's BPM, musical key, and mood directly from the audio signal, and acts as a virtual DJ by creating seamless, beatmatched transitions between songs in real time.
 
 > [!WARNING]
 > **Important Metadata Warning**: During library scanning, this program analyzes track BPM and musical key, and writes these values directly back to the files' ID3 metadata tags (for supported file types, like `.mp3`). By scanning directories containing your music files, you authorize the application to update and modify their metadata tags.
@@ -9,13 +9,14 @@ Your Own Personal DJ is a premium desktop audio player built on Electron and Web
 
 ## Key Features
 
-- **Local AI Vibe & Mood Analysis**: Uses a local **Gemma 3 1B** model running natively on your hardware (accelerated via WebGPU with WebAssembly fallback) to estimate the BPM, musical Key, and Mood tags of your music library.
-- **Advanced Transient Downbeat Matching**: Analyzes the first 30 seconds of track audio on the fly using a Web Audio API absolute envelope peak-detector and a Gaussian grid-fitting algorithm to find the exact downbeat offset (`BeatOffset`) of the first major beat.
+- **Local Audio Analysis (Essentia.js)**: Uses a locally running **Essentia.js** WebAssembly engine to analyze the actual audio waveform — not just the file's text tags. It extracts true BPM (`RhythmExtractor2013`), musical key/scale (`KeyExtractor`), beat positions, and derives a mood tag from the measured tempo, key mode, and loudness. All analysis runs on-device; nothing is uploaded.
+- **Advanced Transient Downbeat Matching**: Determines the exact downbeat offset (`BeatOffset`) of each track from Essentia's detected beat positions, with a built-in Web Audio API envelope peak-detector as a fallback if analysis is unavailable.
 - **Seamless DJ Transitions**:
   - **Tempo Matching**: Matches the tempo of the incoming song to the outgoing song by adjusting its playback speed (`playbackRate`) within a +/- 15% range.
   - **Phase Alignment**: Automatically computes the cue point of the incoming track to align its beats mathematically with the outgoing track's beat grid, preventing tempo clashing or "double beats."
   - **Tempo Drift Restoration**: Once the crossfade completes, the app gradually slides the playback rate back to the song's original speed (1.0x) over 5 seconds (simulating a DJ sliding a pitch fader).
-- **Vibrant Glassmorphic UI**: Includes a responsive, hardware-accelerated disc animation, simulated canvas visualizer, queue list, settings panel, and a live console outputting AI diagnostics.
+- **Heuristic DJ Selection Engine**: Picks the next track using a transparent, rule-based scoring engine that weighs mood, tempo proximity, harmonic key, and genre compatibility — with guardrails against jarring transitions (e.g. bridging between mild and heavy genres) and repeat-protection windows.
+- **Vibrant Glassmorphic UI**: Includes a responsive, hardware-accelerated disc animation, simulated canvas visualizer, queue list, settings panel, and a live console outputting analysis diagnostics.
 - **Internet Metadata Enrichment**: Pulls releases, tags, genres, and release years asynchronously from the public **MusicBrainz API** for the currently playing track.
 
 ---
@@ -37,10 +38,10 @@ Your Own Personal DJ is designed to keep your project files clean and adhere to 
 ## Disk Space & Resource Footprint
 
 - **Packaged Standalone Executable**: ~**180 MB** (contains the packaged Electron container, Node.js runtime, and compiled native modules).
-- **Local AI Model Cache**: ~**900 MB** (the pre-quantized Gemma 3 1B model weights file `onnx-community/gemma-3-1b-it-ONNX` is downloaded upon first launch and cached under standard Hugging Face hubs or Chromium's Origin Private File System/Cache API).
+- **Audio Analysis Engine**: Essentia.js ships **bundled** inside the application's `node_modules` (a few MB of WebAssembly). There is **no large model to download** at runtime and no network dependency for analysis.
 - **Database Cache (`library.md`)**: Typically less than **1 MB** (scales with the size of your music catalog; holds textual paths, titles, genres, BPM, key, mood, and beat offsets).
 - **Hardware Resources**:
-  - **GPU**: Utilizes WebGPU for local Gemma AI operations (falls back to WebAssembly CPU execution if no compatible GPU or browser interface is found).
+  - **CPU**: Audio analysis runs in a background Web Worker so the UI stays responsive. Analysis is capped to the first ~90 seconds of each track to bound CPU time.
   - **Memory**: Electron processes typically consume between 150MB - 350MB of RAM during audio playback and background processing.
 
 ---
@@ -49,7 +50,7 @@ Your Own Personal DJ is designed to keep your project files clean and adhere to 
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) (v18.0.0 or higher recommended)
+- [Node.js](https://nodejs.org/) **v22.12.0 or higher** (required by `@electron/packager` v20; also fine for running the app)
 - Git (optional, for version control)
 
 ### Installation & Run
@@ -79,22 +80,26 @@ The packaged product will be compiled under `dist/Your Own Personal DJ-win32-x64
 
 ```
 YourOwnPersonalDJ/
-├── .gitignore               # Excludes dependencies and local packaging builds
-├── package.json             # App configurations, dependencies, and build scripts
-├── LICENSES.chromium.html   # Detailed credits and licensing for used libraries
-├── main.js                  # Main process: app lifecycle, IPC channels, and DB management
-├── preload.js               # IPC bridge: exposes secure file and ID3 APIs to frontend
-├── index.html               # Main user interface markup
-├── styles.css               # Styling design system (vanilla CSS layout)
-├── renderer.js              # Frontend logic: audio player, downbeat analytics, AI & heuristics
-└── dist/                    # (Auto-generated on build) Standalone packaged build
+├── .gitignore                  # Excludes dependencies and local packaging builds
+├── package.json                # App configurations, dependencies, and build scripts
+├── LICENSE                     # GNU Affero General Public License v3.0
+├── NOTICE                      # Third-party attributions
+├── LICENSES.chromium.html      # Detailed credits and licensing for used libraries
+├── main.js                     # Main process: app lifecycle, IPC channels, and DB management
+├── preload.js                  # IPC bridge: exposes secure file and ID3 APIs to frontend
+├── index.html                  # Main user interface markup
+├── styles.css                  # Styling design system (vanilla CSS layout)
+├── renderer.js                 # Frontend logic: audio player, decode, analysis & heuristics
+├── audio-analysis-worker.js    # Essentia.js worker: BPM, key, mood & beat-offset extraction
+├── audio.html                  # Isolated audio playback engine window
+├── audio-renderer.js           # Crossfade / beatmatch playback engine
+└── dist/                       # (Auto-generated on build) Standalone packaged build
 ```
 
 ---
 
 ## Licensing & Attributions
 
-- **Custom Application Source Code**: Licensed under the **MIT License** (see the root [LICENSE](LICENSE) file).
-- **Third-Party Software Components**: Detailed attributions are provided in the root [NOTICE](NOTICE) file. All external open-source libraries (Electron, Chromium, transformers.js, music-metadata, node-id3, etc.) are credited with their corresponding licenses in the [LICENSES.chromium.html](LICENSES.chromium.html) file.
-- **Gemma AI Model License**: **AI Model**: Gemma 3 (1B) licensed under [Google Gemma Terms of Use](https://ai.google.dev/gemma/terms)  
-  Users must comply with [Google's Prohibited Use Policy](https://ai.google.dev/gemma/prohibited_use_policy)
+- **This Application**: Licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0-or-later)**. See the root [LICENSE](LICENSE) file. Copyright © 2026 Shane W Watson.
+- **Why AGPL**: This project depends on **Essentia.js**, which is licensed under the AGPL-3.0. To remain license-compliant, Your Own Personal DJ is distributed under the same license. If you modify this program and make it available to others over a network, the AGPL requires you to offer them the corresponding source code.
+- **Third-Party Software Components**: Detailed attributions are provided in the root [NOTICE](NOTICE) file. External open-source libraries (Essentia.js, Electron, Chromium, music-metadata, node-id3, etc.) are credited with their corresponding licenses in the [LICENSES.chromium.html](LICENSES.chromium.html) file.

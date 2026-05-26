@@ -8,13 +8,6 @@ contextBridge.exposeInMainWorld('api', {
   onScanComplete: (callback) => ipcRenderer.on('scan-complete', (event, data) => callback(data)),
   getSystemMusicFolder: () => ipcRenderer.invoke('get-system-music-folder'),
   loadLibrary: () => ipcRenderer.invoke('load-library'),
-  
-  // Model Download & Local Offline Support
-  checkModelStatus: () => ipcRenderer.invoke('check-model-status'),
-  downloadModel: () => ipcRenderer.invoke('download-model'),
-  onModelDownloadStart: (callback) => ipcRenderer.on('model-download-start', (event, data) => callback(data)),
-  onModelDownloadProgress: (callback) => ipcRenderer.on('model-download-progress', (event, data) => callback(data)),
-  onModelDownloadComplete: (callback) => ipcRenderer.on('model-download-complete', (event) => callback()),
   openExternal: (url) => ipcRenderer.send('open-external', url),
   
   // Audio Process Communication Bridge

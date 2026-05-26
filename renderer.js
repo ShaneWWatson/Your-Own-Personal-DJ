@@ -218,7 +218,7 @@ async function initAIWorker() {
   updateAIStatusUI();
   logConsole('Initializing local AI Web Worker thread...', 'system');
 
-  aiWorker = new Worker('ai-worker.js?v=' + Date.now(), { type: 'module' });
+  aiWorker = new Worker('audio-analysis-worker.js?v=' + Date.now(), { type: 'module' });
 
   aiWorker.onmessage = (event) => {
     const { type, id, data, error } = event.data;
@@ -254,22 +254,15 @@ async function initAIWorker() {
     logConsole(`AI Web Worker Error: ${err.message}`, 'danger');
   };
 
-  try {
-    const modelStatus = await window.api.checkModelStatus();
-    sendWorkerRequest('init', { 
-      localModelPath: modelStatus.downloaded ? modelStatus.path : null
-    });
-  } catch (err) {
-    console.error('Failed checking local model status:', err);
-    sendWorkerRequest('init');
-  }
+  // Essentia.js WebAssembly ships bundled with the app — no model download needed.
+  sendWorkerRequest('init');
 }
 
-function sendWorkerRequest(action, payload = {}) {
+function sendWorkerRequest(action, payload = {}, transfer = []) {
   return new Promise((resolve, reject) => {
     const id = ++workerRequestId;
     pendingWorkerRequests.set(id, { resolve, reject });
-    aiWorker.postMessage({ action, id, payload });
+    aiWorker.postMessage({ action, id, payload }, transfer);
   });
 }
 
@@ -493,68 +486,13 @@ function setUpSettings() {
     }
   });
 
-  // Model Download Interaction Handling
+  // Audio Engine Panel (Essentia.js ships bundled — there is nothing to download).
+  // The legacy "download model" controls are hidden; the panel just reports readiness.
   const btnDownloadModel = document.getElementById('btn-download-model');
   const downloadProgressContainer = document.getElementById('model-download-progress-container');
-  const downloadStatusText = document.getElementById('model-download-status');
-  const downloadPercentageText = document.getElementById('model-download-percentage');
-  const downloadBarFill = document.getElementById('model-download-bar');
 
-  btnDownloadModel.addEventListener('click', async () => {
-    btnDownloadModel.setAttribute('disabled', 'true');
-    btnDownloadModel.innerText = 'Downloading...';
-    downloadProgressContainer.classList.remove('hidden');
-    const errorMsgEl = document.getElementById('model-download-error-msg');
-    if (errorMsgEl) {
-      errorMsgEl.classList.add('hidden');
-    }
-    
-    const result = await window.api.downloadModel();
-    
-    btnDownloadModel.removeAttribute('disabled');
-    updateModelStatusUI();
-    
-    if (result.success) {
-      downloadStatusText.innerText = 'Download Complete!';
-      downloadPercentageText.innerText = '100%';
-      downloadBarFill.style.width = '100%';
-      logConsole('Gemma local model downloaded successfully. Reinitializing AI Web Worker...', 'success');
-      
-      // Reinitialize the worker with local path
-      if (aiWorker) {
-        aiWorker.terminate();
-      }
-      initAIWorker();
-      
-      setTimeout(() => {
-        downloadProgressContainer.classList.add('hidden');
-      }, 5000);
-    } else {
-      downloadStatusText.innerText = 'Download Failed!';
-      if (errorMsgEl) {
-        errorMsgEl.innerHTML = `<strong>Error:</strong> ${result.error.replace(/\n/g, '<br>')}`;
-        errorMsgEl.classList.remove('hidden');
-      }
-    }
-  });
-
-  // Progress events from IPC
-  window.api.onModelDownloadStart(({ totalFiles }) => {
-    downloadStatusText.innerText = `Starting download (0/${totalFiles} files)...`;
-    downloadPercentageText.innerText = '0%';
-    downloadBarFill.style.width = '0%';
-  });
-
-  window.api.onModelDownloadProgress(({ file, downloadedBytes, totalBytes, percent, filesCompleted, totalFiles }) => {
-    const mbDownloaded = (downloadedBytes / (1024 * 1024)).toFixed(1);
-    const mbTotal = (totalBytes / (1024 * 1024)).toFixed(1);
-    
-    downloadStatusText.innerText = `[${filesCompleted + 1}/${totalFiles}] ${file} (${mbDownloaded}/${mbTotal} MB)`;
-    
-    const overallPercent = Math.round(((filesCompleted + (percent / 100)) / totalFiles) * 100);
-    downloadPercentageText.innerText = `${overallPercent}%`;
-    downloadBarFill.style.width = `${overallPercent}%`;
-  });
+  if (btnDownloadModel) btnDownloadModel.classList.add('hidden');
+  if (downloadProgressContainer) downloadProgressContainer.classList.add('hidden');
 
   crossfadeSlider.addEventListener('input', (e) => {
     const val = parseInt(e.target.value);
@@ -571,28 +509,17 @@ function setUpSettings() {
 }
 
 async function updateModelStatusUI() {
+  // Essentia.js is bundled with the application; there is no separate model to
+  // download. Just reflect a "Bundled" ready state on the badge if present.
   try {
-    const status = await window.api.checkModelStatus();
     const badge = document.getElementById('model-status-badge');
-    const btn = document.getElementById('btn-download-model');
-    
-    if (!badge || !btn) return;
-    
-    if (status.downloaded) {
-      badge.innerText = 'Downloaded';
-      badge.style.background = 'rgba(16, 185, 129, 0.15)';
-      badge.style.color = 'var(--success)';
-      badge.style.borderColor = 'rgba(16, 185, 129, 0.2)';
-      btn.innerText = 'Redownload Model';
-    } else {
-      badge.innerText = 'Not Downloaded';
-      badge.style.background = 'rgba(239, 68, 68, 0.15)';
-      badge.style.color = '#ef4444';
-      badge.style.borderColor = 'rgba(239, 68, 68, 0.2)';
-      btn.innerText = 'Download Model Files';
-    }
+    if (!badge) return;
+    badge.innerText = 'Bundled';
+    badge.style.background = 'rgba(16, 185, 129, 0.15)';
+    badge.style.color = 'var(--success)';
+    badge.style.borderColor = 'rgba(16, 185, 129, 0.2)';
   } catch (err) {
-    console.error('Error updating model status UI:', err);
+    console.error('Error updating engine status UI:', err);
   }
 }
 
@@ -792,7 +719,7 @@ window.api.onScanComplete(async (data) => {
   showNotification('Scanning Completed', `Successfully scanned and cataloged ${data.total} music tracks.`);
 });
 
-// --- Background Metadata Processor (BPM & Key via Gemma & Transient Analysis) ---
+// --- Background Metadata Processor (BPM, Key, Mood & beat offset via Essentia.js) ---
 let isProcessingMetadata = false;
 
 function updateAnalysisProgress() {
@@ -811,7 +738,7 @@ function updateAnalysisProgress() {
     analysisProgressBar.style.width = `${percent}%`;
     analysisPercentage.innerText = `${percent}%`;
     
-    const engineType = state.ollamaStatus === 'connected' ? 'AI' : 'Heuristics';
+    const engineType = state.ollamaStatus === 'connected' ? 'Essentia' : 'Heuristics';
     analysisStatusText.innerText = `Analyzing metadata & transients (${engineType}): ${completed}/${total} files`;
   } else {
     analysisProgressContainer.classList.add('hidden');
@@ -827,52 +754,62 @@ async function backgroundMetadataProcessor() {
   if (!track) return;
 
   isProcessingMetadata = true;
-  logConsole(`Analyzing metadata for "${track.title}" using local AI & audio analyzer...`, 'info');
+  logConsole(`Analyzing "${track.title}" with Essentia.js audio analysis...`, 'info');
 
   let bpm = track.bpm;
   let key = track.key;
   let mood = track.mood;
   let beatOffset = track.beatOffset;
 
-  if (bpm === null || key === null || mood === undefined || mood === null) {
-    if (state.ollamaStatus === 'connected') {
-      try {
-        const result = await sendWorkerRequest('analyze-metadata', { track });
-        const parsed = parseLLMJSON(result.generatedText);
-        
-        bpm = parseInt(parsed.bpm) || 100;
-        key = parsed.key || 'C Maj';
-        mood = parsed.mood || 'chill';
-        logConsole(`Gemma analyzed "${track.title}": Estimated BPM: ${bpm}, Key: ${key}, Mood: ${mood}`, 'ai');
-      } catch (err) {
-        logConsole(`Gemma metadata estimation failed: ${err.message}. Using fallback.`, 'warning');
-        const fallback = getHeuristicMetadata(track);
-        bpm = fallback.bpm;
-        key = fallback.key;
-        mood = fallback.mood;
-      }
-    } else {
-      const fallback = getHeuristicMetadata(track);
-      bpm = fallback.bpm;
-      key = fallback.key;
-      mood = fallback.mood;
-      logConsole(`Heuristics analyzed "${track.title}": Estimated BPM: ${bpm}, Key: ${key}, Mood: ${mood}`, 'system');
-    }
-  }
+  const needsAnalysis = (bpm === null || key === null || mood === undefined || mood === null || beatOffset === undefined || beatOffset === null);
 
-  // Analyze audio transients for beatOffset if missing
-  if (beatOffset === undefined || beatOffset === null) {
-    logConsole(`Analyzing audio transients for "${track.title}"...`, 'info');
-    try {
-      const audioAnalysis = await runTransientAnalysis(track.path, bpm);
-      beatOffset = audioAnalysis.beatOffset;
-      if (audioAnalysis.bpm && (!track.bpm || track.bpm === 100)) {
-        bpm = audioAnalysis.bpm;
-        logConsole(`Refined BPM for "${track.title}" from audio analysis: ${bpm}`, 'success');
+  if (needsAnalysis) {
+    // 1. Real audio analysis via Essentia.js.
+    //    The renderer decodes the waveform (it has OfflineAudioContext); the
+    //    worker runs Essentia on the raw samples and returns BPM/Key/Mood/offset.
+    if (state.ollamaStatus === 'connected' && aiWorker) {
+      try {
+        const decoded = await decodeTrackToMono(track.path);
+        const result = await sendWorkerRequest(
+          'analyze',
+          { samples: decoded.samples, sampleRate: decoded.sampleRate },
+          [decoded.samples.buffer] // transfer for zero-copy speed
+        );
+
+        if (result.bpm) bpm = result.bpm;
+        if (result.key) key = result.key;
+        if (result.mood) mood = result.mood;
+        if (result.beatOffset !== undefined && result.beatOffset !== null) beatOffset = result.beatOffset;
+
+        logConsole(`Essentia analyzed "${track.title}": BPM ${bpm}, Key ${key}, Mood ${mood} (beat offset ${beatOffset}s)`, 'ai');
+      } catch (err) {
+        logConsole(`Essentia analysis failed for "${track.title}": ${err.message}. Falling back.`, 'warning');
       }
-    } catch (err) {
-      logConsole(`Audio transient analysis failed for "${track.title}": ${err.message}`, 'warning');
-      beatOffset = 0;
+    }
+
+    // 2. Heuristic fallback for any field Essentia couldn't determine.
+    if (bpm === null || key === null || mood === undefined || mood === null) {
+      const fallback = getHeuristicMetadata(track);
+      if (bpm === null) bpm = fallback.bpm;
+      if (key === null) key = fallback.key;
+      if (mood === undefined || mood === null) mood = fallback.mood;
+      logConsole(`Heuristic fallback for "${track.title}": BPM ${bpm}, Key ${key}, Mood ${mood}`, 'system');
+    }
+
+    // 3. If beat offset is still missing (Essentia unavailable), use the
+    //    built-in Web Audio transient detector as a last resort.
+    if (beatOffset === undefined || beatOffset === null) {
+      logConsole(`Running fallback transient beat detection for "${track.title}"...`, 'info');
+      try {
+        const audioAnalysis = await runTransientAnalysis(track.path, bpm);
+        beatOffset = audioAnalysis.beatOffset;
+        if (audioAnalysis.bpm && (!bpm || bpm === 100)) {
+          bpm = audioAnalysis.bpm;
+        }
+      } catch (err) {
+        logConsole(`Transient analysis failed for "${track.title}": ${err.message}`, 'warning');
+        beatOffset = 0;
+      }
     }
   }
 
@@ -949,18 +886,34 @@ function getHeuristicMetadata(track) {
 function isArtistAllowed(artist) {
   if (!artist || artist === 'Unknown Artist') return true;
   const now = Date.now();
-  const timeLimit = 20 * 60 * 1000;
-  
+  const timeLimit = 20 * 60 * 1000; // 20 minutes
+
+  // (a) Recently PLAYED within the window?
   const recentPlay = state.history.find(h => h.artist === artist && (now - h.playedAt) < timeLimit);
-  return !recentPlay;
+  if (recentPlay) return false;
+
+  // (b) Already sitting in the lookahead QUEUE? Queued tracks play within a few
+  //     minutes, so any same-artist track in the queue would violate the 20-min
+  //     rule once it plays. Block it here too.
+  const inQueue = state.queue.some(q => q.artist === artist);
+  if (inQueue) return false;
+
+  return true;
 }
 
 function isSongAllowed(path) {
   const now = Date.now();
-  const timeLimit = 60 * 60 * 1000;
-  
+  const timeLimit = 60 * 60 * 1000; // 60 minutes
+
+  // (a) Recently PLAYED within the window?
   const recentPlay = state.history.find(h => h.path === path && (now - h.playedAt) < timeLimit);
-  return !recentPlay;
+  if (recentPlay) return false;
+
+  // (b) Already in the lookahead QUEUE?
+  const inQueue = state.queue.some(q => q.path === path);
+  if (inQueue) return false;
+
+  return true;
 }
 
 function areGenresCompatible(genre1, genre2) {
@@ -1045,57 +998,11 @@ async function getNextDJTrack() {
   const currentGenre = state.currentTrack?.genre || 'unknown';
   const currentKey = state.currentTrack?.key || 'C Maj';
 
-  // 1. Local AI DJ Decision Maker (running in Web Worker)
-  if (state.ollamaStatus === 'connected' && aiWorker) {
-    try {
-      let selectedPool = [];
-      if (state.mood === 'custom') {
-        const shuffled = [...candidates].sort(() => 0.5 - Math.random());
-        selectedPool = shuffled.slice(0, 15);
-      } else {
-        const scored = candidates.map(c => ({
-          score: getHeuristicScore(c, currentBpm, currentGenre, currentKey),
-          track: c
-        }));
-        
-        scored.sort((a, b) => b.score - a.score);
-        if (scored.length > 0) {
-          const maxScore = scored[0].score;
-          const topPerformers = scored.filter(item => item.score >= maxScore - 40);
-          const shuffledTop = [...topPerformers].sort(() => 0.5 - Math.random());
-          selectedPool = shuffledTop.slice(0, 10).map(item => item.track);
-        }
-      }
+  // Track selection is handled by the heuristic rule engine below.
+  // (The previous LLM "DJ" selection step was removed when Gemma was replaced
+  //  by Essentia.js — Essentia does audio analysis, not track-choice reasoning.)
 
-      if (selectedPool.length > 0) {
-        const result = await sendWorkerRequest('select-next-track', {
-          mood: state.mood,
-          customMoodPrompt: state.customMoodPrompt,
-          currentTrack: state.currentTrack,
-          currentBpm,
-          currentGenre,
-          currentKey,
-          selectedPool
-        });
-
-        const parsed = parseLLMJSON(result.generatedText);
-        const chosenTrack = state.library.find(t => t.path === parsed.path);
-        
-        if (chosenTrack) {
-          logConsole(`Gemma DJ selected: "${chosenTrack.title}" by ${chosenTrack.artist}`, 'ai');
-          logConsole(`Gemma Reason: "${parsed.reason}"`, 'ai');
-          return {
-            path: chosenTrack.path,
-            reason: parsed.reason
-          };
-        }
-      }
-    } catch (e) {
-      logConsole(`Gemma DJ selection failed: ${e.message}. Using rule fallback.`, 'warning');
-    }
-  }
-
-  // 2. Heuristic Rule Engine
+  // Heuristic Rule Engine
   const scoredCandidates = candidates.map(c => {
     const noise = Math.random() * 30;
     return {
@@ -1667,7 +1574,7 @@ function updateAIStatusUI() {
     aiModelName.innerText = state.ollamaModel;
   } else if (state.ollamaStatus === 'checking') {
     aiStatusText.innerText = 'Loading...';
-    aiModelName.innerText = 'Initializing Model...';
+    aiModelName.innerText = 'Initializing Essentia...';
   } else if (state.ollamaStatus === 'fallback') {
     aiStatusText.innerText = 'Heuristics';
     aiModelName.innerText = 'Rule-based Heuristics';
@@ -1677,7 +1584,39 @@ function updateAIStatusUI() {
   }
 }
 
-// Transient detection helper
+// Decode an audio file to a mono Float32Array at 44100 Hz for Essentia analysis.
+// Decoding uses OfflineAudioContext (renderer-only); the resulting samples are
+// then transferred to the Essentia worker.
+async function decodeTrackToMono(trackPath) {
+  const secureUrl = 'app-media:///' + trackPath.replace(/\\/g, '/');
+  const response = await fetch(secureUrl);
+  if (!response.ok) throw new Error(`Fetch failed with status ${response.status}`);
+
+  const arrayBuffer = await response.arrayBuffer();
+  // Force 44100 Hz so Essentia's default-sample-rate algorithms stay accurate.
+  const ctx = new (window.OfflineAudioContext || window.AudioContext)(1, 44100, 44100);
+  const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+
+  const sampleRate = audioBuffer.sampleRate;
+  const channels = audioBuffer.numberOfChannels;
+  const len = audioBuffer.length;
+  const mono = new Float32Array(len);
+
+  if (channels === 1) {
+    mono.set(audioBuffer.getChannelData(0));
+  } else {
+    for (let c = 0; c < channels; c++) {
+      const data = audioBuffer.getChannelData(c);
+      for (let i = 0; i < len; i++) {
+        mono[i] += data[i] / channels;
+      }
+    }
+  }
+
+  return { samples: mono, sampleRate };
+}
+
+// Transient detection helper (fallback beat detector)
 async function runTransientAnalysis(trackPath, knownBpm) {
   const secureUrl = 'app-media:///' + trackPath.replace(/\\/g, '/');
   const response = await fetch(secureUrl);
