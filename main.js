@@ -100,6 +100,21 @@ app.whenReady().then(() => {
         return new Response('File not found', { status: 404 });
       }
       
+      // Restrict access for paths outside the app directory.
+      // Files inside the app directory (like index.html, renderer.js, audio-analysis-worker.js, etc.) are allowed.
+      // Files outside the app directory are strictly limited to valid audio extensions.
+      const normalizedFilePath = path.normalize(filePath).toLowerCase();
+      const normalizedAppDir = path.normalize(__dirname).toLowerCase();
+      
+      if (!normalizedFilePath.startsWith(normalizedAppDir)) {
+        const ext = path.extname(filePath).toLowerCase();
+        const allowedAudioExts = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.wma'];
+        if (!allowedAudioExts.includes(ext)) {
+          console.warn(`[app-media Protocol Blocked] Unauthorized access attempt to non-audio file: ${filePath}`);
+          return new Response('Forbidden', { status: 403 });
+        }
+      }
+      
       const stat = fs.statSync(filePath);
       const fileSize = stat.size;
       const range = request.headers.get('range');

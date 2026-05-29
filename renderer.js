@@ -1,3 +1,14 @@
+// Secure escaping helper for metadata inside HTML templates to prevent DOM XSS
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 // State Management
 let state = {
   library: [],
@@ -31,6 +42,8 @@ const moodProfiles = {
   party: { targetBpm: 125, bpmRange: [110, 140], targetGenres: ['pop', 'dance', 'electronic', 'house', 'funk', 'disco', 'hip hop', 'r&b'] }
 };
 
+const GENERIC_LABEL_SVG = `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'><defs><linearGradient id='grad' x1='0%' y1='0%' x2='100%' y2='100%'><stop offset='0%' stop-color='%238b5cf6' /><stop offset='100%' stop-color='%23ec4899' /></linearGradient></defs><circle cx='50' cy='50' r='50' fill='url(%23grad)' /><circle cx='50' cy='50' r='44' fill='none' stroke='rgba(255,255,255,0.25)' stroke-width='1.5' /><circle cx='50' cy='50' r='38' fill='none' stroke='rgba(255,255,255,0.15)' stroke-width='1' /><circle cx='50' cy='50' r='28' fill='none' stroke='rgba(255,255,255,0.1)' stroke-width='1' /><circle cx='50' cy='50' r='9' fill='none' stroke='rgba(255,255,255,0.3)' stroke-width='1' /><text x='50' y='38' font-family='system-ui, -apple-system, sans-serif' font-size='12' font-weight='900' fill='%23ffffff' text-anchor='middle' letter-spacing='1'>YOP</text><text x='50' y='70' font-family='system-ui, -apple-system, sans-serif' font-size='12' font-weight='900' fill='%23ffffff' text-anchor='middle' letter-spacing='1'>DJ</text><text x='50' y='22' font-family='system-ui, -apple-system, sans-serif' font-size='4' font-weight='700' fill='rgba(255,255,255,0.8)' text-anchor='middle' letter-spacing='2'>PERSONAL MIX</text><text x='50' y='82' font-family='system-ui, -apple-system, sans-serif' font-size='4' font-weight='700' fill='rgba(255,255,255,0.8)' text-anchor='middle' letter-spacing='2'>AI MUSIC ENGINE</text></svg>`;
+
 // DOM Elements
 const foldersList = document.getElementById('folders-list');
 const btnAddFolder = document.getElementById('btn-add-folder');
@@ -59,6 +72,11 @@ const trackTitle = document.getElementById('track-title');
 const trackArtist = document.getElementById('track-artist');
 const trackAlbum = document.getElementById('track-album');
 const albumArt = document.getElementById('album-art');
+albumArt.onerror = () => {
+  if (!albumArt.src.startsWith('data:image/svg+xml')) {
+    albumArt.src = GENERIC_LABEL_SVG;
+  }
+};
 const vinylDisc = document.getElementById('vinyl-disc');
 const canvas = document.getElementById('waveform-visualizer');
 
@@ -424,6 +442,9 @@ window.addEventListener('load', async () => {
 
   // Set up settings triggers
   setUpSettings();
+
+  // Set up tabs triggers
+  setUpTabs();
 
   // Set up audio player triggers (UI side)
   setUpAudioPlayerControls();
@@ -882,19 +903,65 @@ function getHeuristicMetadata(track) {
   return { bpm, key, mood };
 }
 
+// Helper to determine if a track matches a specific mood
+function doesTrackMatchMood(track, mood) {
+  if (!track) return false;
+  
+  if (mood === 'custom') {
+    if (!state.customMoodPrompt) return true;
+    const promptWords = state.customMoodPrompt.toLowerCase().split(' ');
+    const searchArea = `${track.title} ${track.artist} ${track.genre} ${track.mood || ''}`.toLowerCase();
+    return promptWords.some(w => w.length > 2 && searchArea.includes(w));
+  }
+  
+  const sMood = mood.toLowerCase();
+  
+  // If track has no mood, check if its genre matches target genres of active mood profile
+  if (!track.mood) {
+    const profile = moodProfiles[sMood];
+    if (profile && track.genre) {
+      const trackGenre = track.genre.toLowerCase();
+      return profile.targetGenres.some(tg => trackGenre.includes(tg));
+    }
+    return false;
+  }
+  
+  const tMood = track.mood.toLowerCase();
+  if (tMood === sMood) return true;
+  
+  if (sMood === 'energy' && (tMood.includes('energetic') || tMood.includes('upbeat') || tMood.includes('fast') || tMood.includes('intense') || tMood.includes('heavy'))) {
+    return true;
+  }
+  if (sMood === 'chill' && (tMood.includes('mellow') || tMood.includes('relax') || tMood.includes('ambient') || tMood.includes('calm') || tMood.includes('soft') || tMood.includes('quiet'))) {
+    return true;
+  }
+  if (sMood === 'focus' && (tMood.includes('study') || tMood.includes('concentration') || tMood.includes('steady') || tMood.includes('instrumental') || tMood.includes('calm') || tMood.includes('ambient'))) {
+    return true;
+  }
+  if (sMood === 'party' && (tMood.includes('dance') || tMood.includes('groove') || tMood.includes('funky') || tMood.includes('upbeat') || tMood.includes('house'))) {
+    return true;
+  }
+  
+  return false;
+}
+
 // --- DJ Rules & Match Algorithms ---
 function isArtistAllowed(artist) {
   if (!artist || artist === 'Unknown Artist') return true;
   const now = Date.now();
-  const timeLimit = 20 * 60 * 1000; // 20 minutes
+  
+  // Scale cooldown time based on library size (at most 20% of library is cooled down)
+  const averageTrackLength = 3.5 * 60 * 1000;
+  const maxCoolDownTracks = Math.max(1, Math.floor(state.library.length * 0.2));
+  const maxCoolDownTime = maxCoolDownTracks * averageTrackLength;
+  
+  const timeLimit = Math.max(2 * 60 * 1000, Math.min(20 * 60 * 1000, maxCoolDownTime));
 
   // (a) Recently PLAYED within the window?
   const recentPlay = state.history.find(h => h.artist === artist && (now - h.playedAt) < timeLimit);
   if (recentPlay) return false;
 
-  // (b) Already sitting in the lookahead QUEUE? Queued tracks play within a few
-  //     minutes, so any same-artist track in the queue would violate the 20-min
-  //     rule once it plays. Block it here too.
+  // (b) Already sitting in the lookahead QUEUE?
   const inQueue = state.queue.some(q => q.artist === artist);
   if (inQueue) return false;
 
@@ -903,7 +970,13 @@ function isArtistAllowed(artist) {
 
 function isSongAllowed(path) {
   const now = Date.now();
-  const timeLimit = 60 * 60 * 1000; // 60 minutes
+  
+  // Scale cooldown time based on library size (at most 50% of library is cooled down)
+  const averageTrackLength = 3.5 * 60 * 1000;
+  const maxCoolDownTracks = Math.max(1, Math.floor(state.library.length * 0.5));
+  const maxCoolDownTime = maxCoolDownTracks * averageTrackLength;
+  
+  const timeLimit = Math.max(5 * 60 * 1000, Math.min(60 * 60 * 1000, maxCoolDownTime));
 
   // (a) Recently PLAYED within the window?
   const recentPlay = state.history.find(h => h.path === path && (now - h.playedAt) < timeLimit);
@@ -952,44 +1025,62 @@ async function fillQueue() {
 }
 
 async function getNextDJTrack() {
-  // Layer 1: Strict constraints
-  let candidates = state.library.filter(track => {
-    if (state.queue.some(q => q.path === track.path)) return false;
-    if (state.currentTrack && state.currentTrack.path === track.path) return false;
+  const hasMoodMatchingTracks = state.library.some(t => doesTrackMatchMood(t, state.mood));
+
+  // Helper to filter candidates based on mood constraints
+  const getBaseCandidates = (checkMood) => {
+    return state.library.filter(track => {
+      // Never select tracks currently in queue or currently playing
+      if (state.queue.some(q => q.path === track.path)) return false;
+      if (state.currentTrack && state.currentTrack.path === track.path) return false;
+      if (checkMood && hasMoodMatchingTracks && !doesTrackMatchMood(track, state.mood)) return false;
+      return true;
+    });
+  };
+
+  let candidates = [];
+
+  // Layer 1: Strict constraints (compatible genre, artist allowed, song allowed, mood matching)
+  candidates = getBaseCandidates(true).filter(track => {
     if (state.currentTrack && !areGenresCompatible(state.currentTrack.genre, track.genre)) return false;
     if (!isArtistAllowed(track.artist)) return false;
     if (!isSongAllowed(track.path)) return false;
     return true;
   });
 
-  // Layer 2: Relax genre constraints
+  // Layer 2: Relax genre constraints (keep artist allowed, song allowed, mood matching)
   if (candidates.length === 0) {
-    candidates = state.library.filter(track => {
-      if (state.queue.some(q => q.path === track.path)) return false;
-      if (state.currentTrack && state.currentTrack.path === track.path) return false;
+    candidates = getBaseCandidates(true).filter(track => {
       if (!isArtistAllowed(track.artist)) return false;
       if (!isSongAllowed(track.path)) return false;
       return true;
     });
   }
 
-  // Layer 3: Relax artist constraints
+  // Layer 3: Relax artist constraints (keep song allowed, mood matching)
   if (candidates.length === 0) {
-    candidates = state.library.filter(track => {
-      if (state.queue.some(q => q.path === track.path)) return false;
-      if (state.currentTrack && state.currentTrack.path === track.path) return false;
+    candidates = getBaseCandidates(true).filter(track => {
       if (!isSongAllowed(track.path)) return false;
       return true;
     });
   }
 
-  // Layer 4: Absolute fallback
+  // Layer 4: Relax song allowed (ignores song allowed, but keeps mood matching to prevent breaking vibes)
   if (candidates.length === 0) {
-    candidates = state.library.filter(track => {
-      if (state.queue.some(q => q.path === track.path)) return false;
-      if (state.currentTrack && state.currentTrack.path === track.path) return false;
+    candidates = getBaseCandidates(true);
+  }
+
+  // Layer 5: Fallback - if no tracks match the mood at all, relax mood check but respect repeat checks
+  if (candidates.length === 0 && hasMoodMatchingTracks) {
+    candidates = getBaseCandidates(false).filter(track => {
+      if (!isSongAllowed(track.path)) return false;
       return true;
     });
+  }
+
+  // Layer 6: Absolute fallback (ignore mood, ignore song allowed, but keep queue/current track excluded)
+  if (candidates.length === 0) {
+    candidates = getBaseCandidates(false);
   }
 
   if (candidates.length === 0) return null;
@@ -1096,7 +1187,61 @@ function getHeuristicScore(track, currentBpm, currentGenre, currentKey) {
     }
   }
 
+  // 3. Repeat and Artist Penalty (Soft cooldown for fallback/small-library scenarios)
+  const now = Date.now();
+  
+  // (a) Song Repeat Penalty: penalize up to -300 points for plays within 60 minutes
+  const recentPlays = state.history.filter(h => h.path === track.path);
+  if (recentPlays.length > 0) {
+    const lastPlayed = Math.max(...recentPlays.map(h => h.playedAt));
+    const timeSincePlayed = now - lastPlayed;
+    const oneHour = 60 * 60 * 1000;
+    if (timeSincePlayed < oneHour) {
+      const penalty = -300 * (1 - (timeSincePlayed / oneHour));
+      score += penalty;
+    }
+  }
+
+  // (b) Artist Repeat Penalty: penalize up to -100 points for artist plays within 20 minutes
+  if (track.artist && track.artist !== 'Unknown Artist') {
+    const recentArtistPlays = state.history.filter(h => h.artist === track.artist);
+    if (recentArtistPlays.length > 0) {
+      const lastPlayed = Math.max(...recentArtistPlays.map(h => h.playedAt));
+      const timeSincePlayed = now - lastPlayed;
+      const twentyMin = 20 * 60 * 1000;
+      if (timeSincePlayed < twentyMin) {
+        const penalty = -100 * (1 - (timeSincePlayed / twentyMin));
+        score += penalty;
+      }
+    }
+  }
+
   return score;
+}
+
+// --- Tabs navigation setup ---
+function setUpTabs() {
+  const tabDashboard = document.getElementById('tab-dashboard');
+  const tabLibrary = document.getElementById('tab-library');
+  const contentDashboard = document.getElementById('content-dashboard');
+  const contentLibrary = document.getElementById('content-library');
+
+  if (tabDashboard && tabLibrary && contentDashboard && contentLibrary) {
+    tabDashboard.addEventListener('click', () => {
+      tabDashboard.classList.add('active');
+      tabLibrary.classList.remove('active');
+      contentDashboard.classList.add('active');
+      contentLibrary.classList.remove('active');
+    });
+
+    tabLibrary.addEventListener('click', () => {
+      tabLibrary.classList.add('active');
+      tabDashboard.classList.remove('active');
+      contentLibrary.classList.add('active');
+      contentDashboard.classList.remove('active');
+      renderLibraryTable();
+    });
+  }
 }
 
 // --- Player controls setup ---
@@ -1240,7 +1385,7 @@ function updateNowPlayingUI() {
   if (state.currentTrack.albumArt) {
     albumArt.src = state.currentTrack.albumArt;
   } else {
-    albumArt.src = `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'><rect width='100' height='100' fill='%231e1b4b'/><circle cx='50' cy='50' r='40' fill='none' stroke='%234f46e5' stroke-width='2'/><path d='M30 50 A20 20 0 0 1 70 50' fill='none' stroke='%230d9488' stroke-width='2'/></svg>`;
+    albumArt.src = GENERIC_LABEL_SVG;
   }
 
   const rows = libraryTableBody.querySelectorAll('tr');
@@ -1341,31 +1486,59 @@ async function enrichMetadata(artist, title) {
     const country = releases.length > 0 ? (releases[0].country || 'Unknown') : 'Unknown';
     const tagsList = tags.slice(0, 4).map(t => t.name).join(', ') || 'None';
 
+    const cleanTitle = escapeHtml(rec.title);
+    const cleanArtistCredit = escapeHtml(rec['artist-credit']?.[0]?.name || artist);
+    const cleanAlbum = escapeHtml(albumName);
+    const cleanReleaseDate = escapeHtml(releaseDate);
+    const cleanCountry = escapeHtml(country);
+    const cleanTags = escapeHtml(tagsList);
+
     enrichmentContent.innerHTML = `
       <div style="display:flex; flex-direction:column; gap: 8px;">
-        <div style="font-size:0.9rem; font-weight:700; color:white;">${rec.title}</div>
-        <div style="font-size:0.78rem; color:var(--primary-hover); margin-bottom: 4px;">by ${rec['artist-credit']?.[0]?.name || artist}</div>
+        <div style="font-size:0.9rem; font-weight:700; color:white;">${cleanTitle}</div>
+        <div style="font-size:0.78rem; color:var(--primary-hover); margin-bottom: 4px;">by ${cleanArtistCredit}</div>
         
         <div class="enriched-data-grid">
           <div class="enriched-tag">
             <strong>Album</strong>
-            ${albumName}
+            ${cleanAlbum}
           </div>
           <div class="enriched-tag">
             <strong>Release Date</strong>
-            ${releaseDate}
+            ${cleanReleaseDate}
           </div>
           <div class="enriched-tag">
             <strong>Country</strong>
-            ${country}
+            ${cleanCountry}
           </div>
           <div class="enriched-tag">
             <strong>Tags / Genres</strong>
-            ${tagsList}
+            ${cleanTags}
           </div>
         </div>
       </div>
     `;
+    
+    // Attempt Cover Art Archive fetch if no embedded cover art
+    if (state.currentTrack && state.currentTrack.artist === artist && state.currentTrack.title === title) {
+      if (!state.currentTrack.albumArt && releases.length > 0 && releases[0].id) {
+        const releaseId = releases[0].id;
+        const caaUrl = `https://coverartarchive.org/release/${releaseId}/front-250`;
+        
+        state.currentTrack.albumArt = caaUrl;
+        albumArt.src = caaUrl;
+        
+        // Save updated track to database cache
+        await dbSaveTrack(state.currentTrack);
+        
+        // Update in memory library
+        const libTrack = state.library.find(t => t.path === state.currentTrack.path);
+        if (libTrack) {
+          libTrack.albumArt = caaUrl;
+          renderLibraryTable();
+        }
+      }
+    }
   } catch (err) {
     console.error('Internet Enrichment error:', err);
     enrichmentContent.innerHTML = `
@@ -1452,12 +1625,17 @@ function renderLibraryTable() {
   const query = librarySearch.value.trim().toLowerCase();
   
   const filtered = state.library.filter(track => {
+    if (!track) return false;
     if (!query) return true;
+    const title = (track.title || '').toLowerCase();
+    const artist = (track.artist || '').toLowerCase();
+    const album = (track.album || '').toLowerCase();
+    const genre = (track.genre || '').toLowerCase();
     return (
-      track.title.toLowerCase().includes(query) ||
-      track.artist.toLowerCase().includes(query) ||
-      (track.album && track.album.toLowerCase().includes(query)) ||
-      track.genre.toLowerCase().includes(query)
+      title.includes(query) ||
+      artist.includes(query) ||
+      album.includes(query) ||
+      genre.includes(query)
     );
   });
 
@@ -1480,16 +1658,23 @@ function renderLibraryTable() {
       tr.className = 'playing';
     }
 
+    const cleanTitle = escapeHtml(track.title);
+    const cleanArtist = escapeHtml(track.artist);
+    const cleanAlbum = escapeHtml(track.album || '');
+    const cleanGenre = escapeHtml(track.genre);
+    const cleanFormat = escapeHtml(track.format);
+    const cleanMood = track.mood ? escapeHtml(track.mood) : '<span style="color:var(--text-dark);">--</span>';
+
     tr.innerHTML = `
-      <td title="${track.title}">${track.title}</td>
-      <td title="${track.artist}">${track.artist}</td>
-      <td title="${track.album || ''}">${track.album || ''}</td>
-      <td>${track.genre}</td>
+      <td title="${cleanTitle}">${cleanTitle}</td>
+      <td title="${cleanArtist}">${cleanArtist}</td>
+      <td title="${cleanAlbum}">${cleanAlbum}</td>
+      <td>${cleanGenre}</td>
       <td class="text-center">${track.bpm ? track.bpm : '<span style="color:var(--text-dark);">--</span>'}</td>
-      <td class="text-center">${track.key ? track.key : '<span style="color:var(--text-dark);">--</span>'}</td>
-      <td class="text-center" style="text-transform: capitalize;">${track.mood ? track.mood : '<span style="color:var(--text-dark);">--</span>'}</td>
+      <td class="text-center">${track.key ? escapeHtml(track.key) : '<span style="color:var(--text-dark);">--</span>'}</td>
+      <td class="text-center" style="text-transform: capitalize;">${cleanMood}</td>
       <td>${formatDuration(track.duration)}</td>
-      <td style="text-transform: uppercase;">${track.format}</td>
+      <td style="text-transform: uppercase;">${cleanFormat}</td>
     `;
 
     tr.addEventListener('dblclick', () => {
@@ -1523,10 +1708,15 @@ function renderQueue() {
     
     const art = document.createElement('img');
     art.className = 'queue-art';
+    art.onerror = () => {
+      if (!art.src.startsWith('data:image/svg+xml')) {
+        art.src = GENERIC_LABEL_SVG;
+      }
+    };
     if (track.albumArt) {
       art.src = track.albumArt;
     } else {
-      art.src = `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 100 100'><rect width='100' height='100' fill='%231e1b4b'/><circle cx='50' cy='50' r='40' fill='none' stroke='%234f46e5' stroke-width='2'/></svg>`;
+      art.src = GENERIC_LABEL_SVG;
     }
 
     const info = document.createElement('div');
@@ -1584,6 +1774,36 @@ function updateAIStatusUI() {
   }
 }
 
+// Helper to strip ID3v2 tags from ArrayBuffer before decoding.
+// This prevents Chrome's Web Audio API from failing with "Unable to decode audio data"
+// on files containing large metadata (like embedded cover art).
+function stripId3v2(arrayBuffer) {
+  const uint8 = new Uint8Array(arrayBuffer);
+  // Check if it starts with "ID3" (hex: 49 44 33)
+  if (uint8[0] === 0x49 && uint8[1] === 0x44 && uint8[2] === 0x33) {
+    const byte6 = uint8[6];
+    const byte7 = uint8[7];
+    const byte8 = uint8[8];
+    const byte9 = uint8[9];
+    
+    // Synchsafe integer size bytes must be < 128
+    if (byte6 < 128 && byte7 < 128 && byte8 < 128 && byte9 < 128) {
+      const size = (byte6 << 21) | (byte7 << 14) | (byte8 << 7) | byte9;
+      let totalSize = 10 + size;
+      
+      // If footer is present (flags bit 4 is set)
+      if ((uint8[5] & 0x10) !== 0) {
+        totalSize += 10;
+      }
+      
+      if (totalSize < arrayBuffer.byteLength) {
+        return arrayBuffer.slice(totalSize);
+      }
+    }
+  }
+  return arrayBuffer;
+}
+
 // Decode an audio file to a mono Float32Array at 44100 Hz for Essentia analysis.
 // Decoding uses OfflineAudioContext (renderer-only); the resulting samples are
 // then transferred to the Essentia worker.
@@ -1593,9 +1813,11 @@ async function decodeTrackToMono(trackPath) {
   if (!response.ok) throw new Error(`Fetch failed with status ${response.status}`);
 
   const arrayBuffer = await response.arrayBuffer();
+  const cleanBuffer = stripId3v2(arrayBuffer);
+  
   // Force 44100 Hz so Essentia's default-sample-rate algorithms stay accurate.
   const ctx = new (window.OfflineAudioContext || window.AudioContext)(1, 44100, 44100);
-  const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+  const audioBuffer = await ctx.decodeAudioData(cleanBuffer);
 
   const sampleRate = audioBuffer.sampleRate;
   const channels = audioBuffer.numberOfChannels;
@@ -1623,8 +1845,10 @@ async function runTransientAnalysis(trackPath, knownBpm) {
   if (!response.ok) throw new Error(`Fetch failed with status ${response.status}`);
   
   const arrayBuffer = await response.arrayBuffer();
+  const cleanBuffer = stripId3v2(arrayBuffer);
+  
   const ctx = new (window.OfflineAudioContext || window.AudioContext)(1, 44100, 44100);
-  const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+  const audioBuffer = await ctx.decodeAudioData(cleanBuffer);
   
   const sampleRate = audioBuffer.sampleRate;
   const channelData = audioBuffer.getChannelData(0);

@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' app-media:; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://coverartarchive.org app-media:; connect-src 'self' https://musicbrainz.org https://coverartarchive.org;">
   <title>Your Own Personal DJ</title>
   <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -117,200 +118,227 @@
 
     <!-- MAIN DASHBOARD -->
     <main class="main-content">
-      <!-- HEADER: Mood Selector -->
-      <header class="dashboard-header">
-        <div class="header-intro">
-          <h1>Select Your Mood</h1>
-          <p>The AI will adjust the tempo, key harmonies, and genre flow to fit your vibe.</p>
-        </div>
-        
-        <!-- Mood Selector Cards -->
-        <div id="moods-container" class="moods-container">
-          <button class="mood-card active" data-mood="chill">
-            <span class="mood-icon">🌴</span>
-            <span class="mood-name">Chill Out</span>
-            <span class="mood-desc">Mellow, ambient & slow tempos</span>
-          </button>
-          <button class="mood-card" data-mood="focus">
-            <span class="mood-icon">🧠</span>
-            <span class="mood-name">Deep Focus</span>
-            <span class="mood-desc">Steady, mid-tempo & instrumental</span>
-          </button>
-          <button class="mood-card" data-mood="energy">
-            <span class="mood-icon">⚡</span>
-            <span class="mood-name">High Energy</span>
-            <span class="mood-desc">Upbeat, driving rhythms & fast tempos</span>
-          </button>
-          <button class="mood-card" data-mood="party">
-            <span class="mood-icon">🎉</span>
-            <span class="mood-name">Party Vibes</span>
-            <span class="mood-desc">Danceable, grooving beats & high tempo</span>
-          </button>
-          <button class="mood-card" data-mood="custom">
-            <span class="mood-icon">🔮</span>
-            <span class="mood-name">Custom Mood</span>
-            <span class="mood-desc">Define your own musical prompt</span>
-          </button>
-        </div>
+      <!-- Tabs Navigation -->
+      <div class="tabs-nav">
+        <button id="tab-dashboard" class="tab-btn active">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="7" height="9" rx="1"></rect>
+            <rect x="14" y="3" width="7" height="5" rx="1"></rect>
+            <rect x="14" y="12" width="7" height="9" rx="1"></rect>
+            <rect x="3" y="16" width="7" height="5" rx="1"></rect>
+          </svg>
+          <span>Dashboard</span>
+        </button>
+        <button id="tab-library" class="tab-btn">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 18V5l12-2v13"></path>
+            <circle cx="6" cy="18" r="3"></circle>
+            <circle cx="18" cy="16" r="3"></circle>
+          </svg>
+          <span>Music Library</span>
+        </button>
+      </div>
 
-        <!-- Custom Mood Prompt Input (Shows only when Custom is chosen) -->
-        <div id="custom-mood-container" class="custom-mood-container hidden">
-          <div class="custom-input-wrapper">
-            <input type="text" id="custom-mood-input" placeholder="Describe the vibe... (e.g. 'coding at midnight on a rainy cyber cafe', 'peaceful acoustic morning')" />
-            <button id="btn-apply-custom-mood" class="btn-secondary">Apply Vibe</button>
+      <!-- Tab Content: Dashboard -->
+      <div id="content-dashboard" class="tab-content-panel active">
+        <!-- HEADER: Mood Selector -->
+        <header class="dashboard-header">
+          <div class="header-intro">
+            <h1>Select Your Mood</h1>
+            <p>The AI will adjust the tempo, key harmonies, and genre flow to fit your vibe.</p>
           </div>
-        </div>
-      </header>
+          
+          <!-- Mood Selector Cards -->
+          <div id="moods-container" class="moods-container">
+            <button class="mood-card active" data-mood="chill">
+              <span class="mood-icon">🌴</span>
+              <span class="mood-name">Chill Out</span>
+              <span class="mood-desc">Mellow, ambient & slow tempos</span>
+            </button>
+            <button class="mood-card" data-mood="focus">
+              <span class="mood-icon">🧠</span>
+              <span class="mood-name">Deep Focus</span>
+              <span class="mood-desc">Steady, mid-tempo & instrumental</span>
+            </button>
+            <button class="mood-card" data-mood="energy">
+              <span class="mood-icon">⚡</span>
+              <span class="mood-name">High Energy</span>
+              <span class="mood-desc">Upbeat, driving rhythms & fast tempos</span>
+            </button>
+            <button class="mood-card" data-mood="party">
+              <span class="mood-icon">🎉</span>
+              <span class="mood-name">Party Vibes</span>
+              <span class="mood-desc">Danceable, grooving beats & high tempo</span>
+            </button>
+            <button class="mood-card" data-mood="custom">
+              <span class="mood-icon">🔮</span>
+              <span class="mood-name">Custom Mood</span>
+              <span class="mood-desc">Define your own musical prompt</span>
+            </button>
+          </div>
 
-      <!-- PLAYER & GRID LAYOUT -->
-      <div class="player-grid">
-        <!-- LEFT: Now Playing Deck -->
-        <section class="now-playing-section">
-          <div class="card glass-card player-card">
-            
-            <!-- Metadata Badges -->
-            <div class="metadata-badges">
-              <span id="genre-badge" class="badge genre-badge">Genre</span>
-              <span id="bpm-badge" class="badge bpm-badge">-- BPM</span>
-              <span id="key-badge" class="badge key-badge">Key</span>
-              <span id="mood-badge" class="badge mood-badge">Mood</span>
+          <!-- Custom Mood Prompt Input (Shows only when Custom is chosen) -->
+          <div id="custom-mood-container" class="custom-mood-container hidden">
+            <div class="custom-input-wrapper">
+              <input type="text" id="custom-mood-input" placeholder="Describe the vibe... (e.g. 'coding at midnight on a rainy cyber cafe', 'peaceful acoustic morning')" />
+              <button id="btn-apply-custom-mood" class="btn-secondary">Apply Vibe</button>
             </div>
+          </div>
+        </header>
 
-            <!-- Disc Deck Visualizer -->
-            <div class="deck-container">
-              <div id="vinyl-disc" class="vinyl-disc">
-                <img id="album-art" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'><rect width='100' height='100' fill='%231e1b4b'/><circle cx='50' cy='50' r='40' fill='none' stroke='%234f46e5' stroke-width='2'/><path d='M30 50 A20 20 0 0 1 70 50' fill='none' stroke='%230d9488' stroke-width='2'/></svg>" alt="Album Art" class="album-art">
-                <div class="vinyl-center"></div>
+        <!-- PLAYER & GRID LAYOUT -->
+        <div class="player-grid">
+          <!-- LEFT: Now Playing Deck -->
+          <section class="now-playing-section">
+            <div class="card glass-card player-card">
+              
+              <!-- Metadata Badges -->
+              <div class="metadata-badges">
+                <span id="genre-badge" class="badge genre-badge">Genre</span>
+                <span id="bpm-badge" class="badge bpm-badge">-- BPM</span>
+                <span id="key-badge" class="badge key-badge">Key</span>
+                <span id="mood-badge" class="badge mood-badge">Mood</span>
               </div>
-              <canvas id="waveform-visualizer" class="waveform-canvas"></canvas>
-            </div>
 
-            <!-- Song Info -->
-            <div class="track-details">
-              <h2 id="track-title" class="track-title">Ready to Play</h2>
-              <h3 id="track-artist" class="track-artist">Scan files or pick a folder to begin</h3>
-              <p id="track-album" class="track-album"></p>
-            </div>
-
-            <!-- Seeker Progress Bar -->
-            <div class="player-progress">
-              <span id="track-duration-current" class="time-label">0:00</span>
-              <div class="slider-container">
-                <input type="range" id="progress-slider" min="0" max="100" value="0" class="slider">
+              <!-- Disc Deck Visualizer -->
+              <div class="deck-container">
+                <div id="vinyl-disc" class="vinyl-disc">
+                  <img id="album-art" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'><defs><linearGradient id='grad' x1='0%' y1='0%' x2='100%' y2='100%'><stop offset='0%' stop-color='%238b5cf6' /><stop offset='100%' stop-color='%23ec4899' /></linearGradient></defs><circle cx='50' cy='50' r='50' fill='url(%23grad)' /><circle cx='50' cy='50' r='44' fill='none' stroke='rgba(255,255,255,0.25)' stroke-width='1.5' /><circle cx='50' cy='50' r='38' fill='none' stroke='rgba(255,255,255,0.15)' stroke-width='1' /><circle cx='50' cy='50' r='28' fill='none' stroke='rgba(255,255,255,0.1)' stroke-width='1' /><circle cx='50' cy='50' r='9' fill='none' stroke='rgba(255,255,255,0.3)' stroke-width='1' /><text x='50' y='38' font-family='system-ui, -apple-system, sans-serif' font-size='12' font-weight='900' fill='%23ffffff' text-anchor='middle' letter-spacing='1'>YOP</text><text x='50' y='70' font-family='system-ui, -apple-system, sans-serif' font-size='12' font-weight='900' fill='%23ffffff' text-anchor='middle' letter-spacing='1'>DJ</text><text x='50' y='22' font-family='system-ui, -apple-system, sans-serif' font-size='4' font-weight='700' fill='rgba(255,255,255,0.8)' text-anchor='middle' letter-spacing='2'>PERSONAL MIX</text><text x='50' y='82' font-family='system-ui, -apple-system, sans-serif' font-size='4' font-weight='700' fill='rgba(255,255,255,0.8)' text-anchor='middle' letter-spacing='2'>AI MUSIC ENGINE</text></svg>" alt="Album Art" class="album-art">
+                  <div class="vinyl-center"></div>
+                </div>
+                <canvas id="waveform-visualizer" class="waveform-canvas"></canvas>
               </div>
-              <span id="track-duration-total" class="time-label">0:00</span>
-            </div>
 
-            <!-- Controls Panel -->
-            <div class="player-controls">
-              <button id="btn-prev" class="btn-control" title="Previous Track">
-                <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
-                  <path d="m18 6-9 6 9 6V6Zm-11 0h-1v12h1V6Z"></path>
-                </svg>
-              </button>
+              <!-- Song Info -->
+              <div class="track-details">
+                <h2 id="track-title" class="track-title">Ready to Play</h2>
+                <h3 id="track-artist" class="track-artist">Scan files or pick a folder to begin</h3>
+                <p id="track-album" class="track-album"></p>
+              </div>
 
-              <button id="btn-play" class="btn-play-pause" title="Play / Pause">
-                <!-- Play Icon -->
-                <svg id="svg-play" viewBox="0 0 24 24" width="28" height="28" fill="currentColor">
-                  <path d="M8 5v14l11-7z"></path>
-                </svg>
-                <!-- Pause Icon (hidden by default) -->
-                <svg id="svg-pause" viewBox="0 0 24 24" width="28" height="28" fill="currentColor" class="hidden">
-                  <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"></path>
-                </svg>
-              </button>
+              <!-- Seeker Progress Bar -->
+              <div class="player-progress">
+                <span id="track-duration-current" class="time-label">0:00</span>
+                <div class="slider-container">
+                  <input type="range" id="progress-slider" min="0" max="100" value="0" class="slider">
+                </div>
+                <span id="track-duration-total" class="time-label">0:00</span>
+              </div>
 
-              <button id="btn-next" class="btn-control" title="Skip Track">
-                <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
-                  <path d="m6 18 9-6-9-6v12Zm11-12h1v12h-1V6Z"></path>
-                </svg>
-              </button>
-
-              <!-- Volume Control -->
-              <div class="volume-container">
-                <button id="btn-mute" class="btn-icon" title="Mute/Unmute">
-                  <svg id="svg-volume" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M11 5 6 9H2v6h4l5 4V5zm4 3a5 5 0 0 1 0 8m2.5-12a9 9 0 0 1 0 16"></path>
+              <!-- Controls Panel -->
+              <div class="player-controls">
+                <button id="btn-prev" class="btn-control" title="Previous Track">
+                  <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+                    <path d="m18 6-9 6 9 6V6Zm-11 0h-1v12h1V6Z"></path>
                   </svg>
                 </button>
-                <input type="range" id="volume-slider" min="0" max="100" value="80" class="volume-slider">
+
+                <button id="btn-play" class="btn-play-pause" title="Play / Pause">
+                  <!-- Play Icon -->
+                  <svg id="svg-play" viewBox="0 0 24 24" width="28" height="28" fill="currentColor">
+                    <path d="M8 5v14l11-7z"></path>
+                  </svg>
+                  <!-- Pause Icon (hidden by default) -->
+                  <svg id="svg-pause" viewBox="0 0 24 24" width="28" height="28" fill="currentColor" class="hidden">
+                    <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"></path>
+                  </svg>
+                </button>
+
+                <button id="btn-next" class="btn-control" title="Skip Track">
+                  <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+                    <path d="m6 18 9-6-9-6v12Zm11-12h1v12h-1V6Z"></path>
+                  </svg>
+                </button>
+
+                <!-- Volume Control -->
+                <div class="volume-container">
+                  <button id="btn-mute" class="btn-icon" title="Mute/Unmute">
+                    <svg id="svg-volume" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M11 5 6 9H2v6h4l5 4V5zm4 3a5 5 0 0 1 0 8m2.5-12a9 9 0 0 1 0 16"></path>
+                    </svg>
+                  </button>
+                  <input type="range" id="volume-slider" min="0" max="100" value="80" class="volume-slider">
+                </div>
+              </div>
+
+            </div>
+          </section>
+
+          <!-- RIGHT: Queue & Internet Info -->
+          <section class="queue-and-info-section">
+            <!-- Up Next Queue -->
+            <div class="card glass-card flex-grow flex flex-col overflow-hidden mb-4">
+              <h3 class="card-title">What's Coming Up</h3>
+              <div id="coming-up-list" class="coming-up-list">
+                <div class="empty-queue-text">No tracks queued. Add music and hit Play.</div>
               </div>
             </div>
 
-          </div>
-        </section>
-
-        <!-- RIGHT: Queue & Internet Info -->
-        <section class="queue-and-info-section">
-          <!-- Up Next Queue -->
-          <div class="card glass-card flex-grow flex flex-col overflow-hidden mb-4">
-            <h3 class="card-title">What's Coming Up</h3>
-            <div id="coming-up-list" class="coming-up-list">
-              <div class="empty-queue-text">No tracks queued. Add music and hit Play.</div>
-            </div>
-          </div>
-
-          <!-- Internet Metadata Enrichment -->
-          <div class="card glass-card enrichment-card flex flex-col overflow-hidden">
-            <div class="card-title-container">
-              <h3 class="card-title">Internet Metadata</h3>
-              <label class="toggle-switch">
-                <input type="checkbox" id="toggle-enrichment" checked>
-                <span class="slider-round"></span>
-              </label>
-            </div>
-            <div id="enrichment-content" class="enrichment-content">
-              <div class="enrichment-placeholder">
-                <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5">
-                  <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm0 14h.01M12 8v5"></path>
-                </svg>
-                <p>Internet Metadata is active. Select a track to pull details from MusicBrainz.</p>
+            <!-- Internet Metadata Enrichment -->
+            <div class="card glass-card enrichment-card flex flex-col overflow-hidden">
+              <div class="card-title-container">
+                <h3 class="card-title">Internet Metadata</h3>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="toggle-enrichment" checked>
+                  <span class="slider-round"></span>
+                </label>
               </div>
+              <div id="enrichment-content" class="enrichment-content">
+                <div class="enrichment-placeholder">
+                  <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm0 14h.01M12 8v5"></path>
+                  </svg>
+                  <p>Internet Metadata is active. Select a track to pull details from MusicBrainz.</p>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <!-- Tab Content: Library -->
+      <div id="content-library" class="tab-content-panel">
+        <!-- Library Browser -->
+        <section class="library-section">
+          <div class="card glass-card library-card">
+            <div class="library-header">
+              <h3>Music Library</h3>
+              <div class="library-actions">
+                <div class="search-box">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <path d="m21 21-4.3-4.3"></path>
+                  </svg>
+                  <input type="text" id="library-search" placeholder="Search by title, artist, genre...">
+                </div>
+              </div>
+            </div>
+
+            <div class="library-table-container">
+              <table class="library-table">
+                <thead>
+                  <tr>
+                    <th>Title</th>
+                    <th>Artist</th>
+                    <th>Album</th>
+                    <th>Genre</th>
+                    <th>BPM</th>
+                    <th>Key</th>
+                    <th>Mood</th>
+                    <th>Duration</th>
+                    <th>Format</th>
+                  </tr>
+                </thead>
+                <tbody id="library-table-body">
+                  <tr>
+                    <td colspan="9" class="text-center">No tracks in library yet. Add folders and scan.</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
         </section>
       </div>
-
-      <!-- FOOTER: Library Browser -->
-      <section class="library-section">
-        <div class="card glass-card library-card">
-          <div class="library-header">
-            <h3>Music Library</h3>
-            <div class="library-actions">
-              <div class="search-box">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="11" cy="11" r="8"></circle>
-                  <path d="m21 21-4.3-4.3"></path>
-                </svg>
-                <input type="text" id="library-search" placeholder="Search by title, artist, genre...">
-              </div>
-            </div>
-          </div>
-
-          <div class="library-table-container">
-            <table class="library-table">
-              <thead>
-                <tr>
-                  <th>Title</th>
-                  <th>Artist</th>
-                  <th>Album</th>
-                  <th>Genre</th>
-                  <th>BPM</th>
-                  <th>Key</th>
-                  <th>Mood</th>
-                  <th>Duration</th>
-                  <th>Format</th>
-                </tr>
-              </thead>
-              <tbody id="library-table-body">
-                <tr>
-                  <td colspan="9" class="text-center">No tracks in library yet. Add folders and scan.</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
     </main>
   </div>
 
