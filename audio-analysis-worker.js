@@ -98,29 +98,62 @@ function formatKey(key, scale) {
 function deriveMood({ bpm, scale, rms }) {
   const isMinor = scale && scale.toLowerCase() === 'minor';
   // rms is roughly 0..1 perceived loudness/energy of the signal.
-  const highEnergy = rms >= 0.18;
-  const lowEnergy = rms < 0.08;
+  const extremeEnergy = rms >= 0.26; // Wall-of-sound level
+  const highEnergy = rms >= 0.20;    // Driving rock/dance level
+  const midEnergy = rms >= 0.13;     // Standard pop/rock level
+  const lowEnergy = rms < 0.08;      // Quiet/Acoustic level
 
-  if (bpm >= 120 && highEnergy) {
-    return isMinor ? 'energy' : 'party';
+  // Party Vibes: Major, steady driving energy, danceable tempo
+  if (!isMinor && bpm >= 115 && bpm <= 135 && highEnergy && !extremeEnergy) {
+    return 'party';
   }
-  if (bpm >= 110 && !lowEnergy) {
-    return isMinor ? 'energy' : 'party';
+
+  // High Energy: Requires BOTH high speed and high volume, OR extreme volume
+  // This prevents power ballads (mid-tempo, loud) from being called "Energy"
+  if (bpm >= 138 && highEnergy) {
+    return 'energy';
   }
-  if (bpm <= 90 && lowEnergy) {
+
+  if (extremeEnergy && bpm >= 120) {
+    return 'energy';
+  }
+
+  // Chill: Low energy or very slow
+  if (bpm <= 95 && lowEnergy) {
     return isMinor ? 'dark' : 'chill';
   }
-  if (bpm <= 100) {
+  if (bpm <= 105 && !highEnergy) {
     return isMinor ? 'focus' : 'chill';
   }
+
+  // Focus: Steady mid-tempo, controlled volume (most ballads fall here now)
+  // We strictly limit Focus to tracks that are not too fast or too loud.
+  if (bpm >= 90 && bpm <= 120 && midEnergy && !highEnergy) {
+    return 'focus';
+  }
+
+  // Uplifting / Triumphant: Major, mid-tempo, pleasant energy
+  // Choral music and carols often fall here.
+  if (!isMinor && bpm >= 100 && bpm <= 135 && midEnergy) {
+    return 'uplifting';
+  }
+
+  // Fallback for everything else
+  // If it's fast, it can be energy/party.
+  // If it's slow, even if loud, it shouldn't be High Energy.
+  if (bpm > 125) {
+    return isMinor ? 'energy' : 'party';
+  }
+
   return isMinor ? 'focus' : 'uplifting';
 }
 
 /* Average loudness proxy (RMS) computed directly from samples. */
 function computeRms(samples) {
   let sumSq = 0;
-  // Sample at a stride for speed on long arrays.
-  const stride = Math.max(1, Math.floor(samples.length / 500000));
+  // Increase sampling density for better accuracy.
+  // Stride of 10 samples (instead of 500k) provides high-fidelity loudness estimation.
+  const stride = 10;
   let n = 0;
   for (let i = 0; i < samples.length; i += stride) {
     sumSq += samples[i] * samples[i];
@@ -138,51 +171,73 @@ function analyze(samples, sampleRate) {
   const maxSamples = Math.floor(MAX_ANALYSIS_SECONDS * sampleRate);
   const slice = samples.length > maxSamples ? samples.subarray(0, maxSamples) : samples;
 
-  // Essentia expects its own vector type.
-  const signal = essentia.arrayToVector(slice);
-
-  let bpm = null;
-  let beatOffset = 0;
-  let confidence = 0;
+  let signal = null;
+  let rhythm = null;
 
   try {
-    // RhythmExtractor2013: returns { bpm, ticks, confidence, estimates, bpmIntervals }
-    const rhythm = essentia.RhythmExtractor2013(signal);
-    bpm = Math.round(rhythm.bpm);
-    confidence = rhythm.confidence;
-    const ticks = essentia.vectorToArray(rhythm.ticks);
-    if (ticks && ticks.length > 0) {
-      // beatOffset = first detected beat position, reduced into one beat period.
-      const period = 60 / (bpm || 100);
-      beatOffset = parseFloat((ticks[0] % period).toFixed(3));
+    // Essentia expects its own vector type.
+    signal = essentia.arrayToVector(slice);
+
+    let bpm = null;
+    let beatOffset = 0;
+    let confidence = 0;
+
+    try {
+      // RhythmExtractor2013: returns { bpm, ticks, confidence, estimates, bpmIntervals }
+      rhythm = essentia.RhythmExtractor2013(signal);
+      bpm = Math.round(rhythm.bpm);
+      confidence = rhythm.confidence;
+      const ticks = essentia.vectorToArray(rhythm.ticks);
+      if (ticks && ticks.length > 0) {
+        // beatOffset = first detected beat position, reduced into one beat period.
+        const period = 60 / (bpm || 100);
+        beatOffset = parseFloat((ticks[0] % period).toFixed(3));
+      }
+    } catch (e) {
+      // Leave bpm null; renderer will fall back to its own transient analysis.
+      bpm = null;
     }
-  } catch (e) {
-    // Leave bpm null; renderer will fall back to its own transient analysis.
-    bpm = null;
+
+    let key = 'C Maj';
+    let scale = 'major';
+    try {
+      // KeyExtractor: returns { key, scale, strength }
+      const k = essentia.KeyExtractor(signal);
+      key = formatKey(k.key, k.scale);
+      scale = k.scale || 'major';
+    } catch (e) {
+      key = 'C Maj';
+      scale = 'major';
+    }
+
+    const rms = computeRms(slice);
+    const mood = deriveMood({ bpm: bpm || 100, scale, rms });
+
+    return {
+      bpm,
+      key,
+      mood,
+      beatOffset,
+      confidence,
+      rms: parseFloat(rms.toFixed(4))
+    };
+  } finally {
+    // Clean up WASM heap allocations to prevent heap memory exhaustion and abort() errors
+    if (signal) {
+      try { essentia.deleteVector(signal); } catch (err) { console.error('Error deleting signal vector:', err); }
+    }
+    if (rhythm) {
+      if (rhythm.ticks) {
+        try { essentia.deleteVector(rhythm.ticks); } catch (err) { console.error('Error deleting ticks vector:', err); }
+      }
+      if (rhythm.estimates) {
+        try { essentia.deleteVector(rhythm.estimates); } catch (err) { console.error('Error deleting estimates vector:', err); }
+      }
+      if (rhythm.bpmIntervals) {
+        try { essentia.deleteVector(rhythm.bpmIntervals); } catch (err) { console.error('Error deleting bpmIntervals vector:', err); }
+      }
+    }
   }
-
-  let key = 'C Maj';
-  let scale = 'major';
-  try {
-    // KeyExtractor: returns { key, scale, strength }
-    const k = essentia.KeyExtractor(signal);
-    key = formatKey(k.key, k.scale);
-    scale = k.scale || 'major';
-  } catch (e) {
-    key = 'C Maj';
-    scale = 'major';
-  }
-
-  const rms = computeRms(slice);
-  const mood = deriveMood({ bpm: bpm || 100, scale, rms });
-
-  return {
-    bpm,
-    key,
-    mood,
-    beatOffset,
-    confidence
-  };
 }
 
 self.onmessage = async (event) => {

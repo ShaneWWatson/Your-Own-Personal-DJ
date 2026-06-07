@@ -1,16 +1,21 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self' app-media:; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://coverartarchive.org app-media:; connect-src 'self' https://musicbrainz.org https://coverartarchive.org;">
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self' app-media:; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://coverartarchive.org https://*.archive.org app-media:; connect-src 'self' https://musicbrainz.org https://coverartarchive.org https://*.archive.org;">
   <title>Your Own Personal DJ</title>
   <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap"
+    rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
+
 <body>
   <!-- Custom Popup Notification (Scanning Complete, etc.) -->
   <div id="popup-notification" class="popup hidden">
@@ -36,7 +41,8 @@
   <div class="app-container">
     <!-- SIDEBAR -->
     <aside class="sidebar">
-      <div class="sidebar-header" style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+      <div class="sidebar-header"
+        style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
         <div class="logo">
           <svg viewBox="0 0 24 24" width="32" height="32" class="glowing-icon">
             <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none"></circle>
@@ -48,7 +54,9 @@
         <button id="btn-settings" class="btn-icon" title="Settings">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="3"></circle>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            <path
+              d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z">
+            </path>
           </svg>
         </button>
       </div>
@@ -147,7 +155,7 @@
             <h1>Select Your Mood</h1>
             <p>The AI will adjust the tempo, key harmonies, and genre flow to fit your vibe.</p>
           </div>
-          
+
           <!-- Mood Selector Cards -->
           <div id="moods-container" class="moods-container">
             <button class="mood-card active" data-mood="chill">
@@ -180,7 +188,8 @@
           <!-- Custom Mood Prompt Input (Shows only when Custom is chosen) -->
           <div id="custom-mood-container" class="custom-mood-container hidden">
             <div class="custom-input-wrapper">
-              <input type="text" id="custom-mood-input" placeholder="Describe the vibe... (e.g. 'coding at midnight on a rainy cyber cafe', 'peaceful acoustic morning')" />
+              <input type="text" id="custom-mood-input"
+                placeholder="Describe the vibe... (e.g. 'coding at midnight on a rainy cyber cafe', 'peaceful acoustic morning')" />
               <button id="btn-apply-custom-mood" class="btn-secondary">Apply Vibe</button>
             </div>
           </div>
@@ -191,7 +200,7 @@
           <!-- LEFT: Now Playing Deck -->
           <section class="now-playing-section">
             <div class="card glass-card player-card">
-              
+
               <!-- Metadata Badges -->
               <div class="metadata-badges">
                 <span id="genre-badge" class="badge genre-badge">Genre</span>
@@ -203,7 +212,9 @@
               <!-- Disc Deck Visualizer -->
               <div class="deck-container">
                 <div id="vinyl-disc" class="vinyl-disc">
-                  <img id="album-art" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'><defs><linearGradient id='grad' x1='0%' y1='0%' x2='100%' y2='100%'><stop offset='0%' stop-color='%238b5cf6' /><stop offset='100%' stop-color='%23ec4899' /></linearGradient></defs><circle cx='50' cy='50' r='50' fill='url(%23grad)' /><circle cx='50' cy='50' r='44' fill='none' stroke='rgba(255,255,255,0.25)' stroke-width='1.5' /><circle cx='50' cy='50' r='38' fill='none' stroke='rgba(255,255,255,0.15)' stroke-width='1' /><circle cx='50' cy='50' r='28' fill='none' stroke='rgba(255,255,255,0.1)' stroke-width='1' /><circle cx='50' cy='50' r='9' fill='none' stroke='rgba(255,255,255,0.3)' stroke-width='1' /><text x='50' y='38' font-family='system-ui, -apple-system, sans-serif' font-size='12' font-weight='900' fill='%23ffffff' text-anchor='middle' letter-spacing='1'>YOP</text><text x='50' y='70' font-family='system-ui, -apple-system, sans-serif' font-size='12' font-weight='900' fill='%23ffffff' text-anchor='middle' letter-spacing='1'>DJ</text><text x='50' y='22' font-family='system-ui, -apple-system, sans-serif' font-size='4' font-weight='700' fill='rgba(255,255,255,0.8)' text-anchor='middle' letter-spacing='2'>PERSONAL MIX</text><text x='50' y='82' font-family='system-ui, -apple-system, sans-serif' font-size='4' font-weight='700' fill='rgba(255,255,255,0.8)' text-anchor='middle' letter-spacing='2'>AI MUSIC ENGINE</text></svg>" alt="Album Art" class="album-art">
+                  <img id="album-art"
+                    src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDAiIGhlaWdodD0iMTAwIiB2aWV3Qm94PSIwIDAgMTAwIDEwMCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJncmFkIiB4MT0iMCUiIHkxPSIwJSIgeDI9IjEwMCUiIHkyPSIxMDAlIj48c3RvcCBvZmZzZXQ9IjAlIiBzdG9wLWNvbG9yPSIjOGI1Y2Y2IiAvPjxzdG9wIG9mZnNldD0iMTAwJSIgc3RvcC1jb2xvcj0iI2VjNDg5OSIgLz48L2xpbmVhckdyYWRpZW50PjwvZGVmcz48Y2lyY2xlIGN4PSI1MCIgY3k9IjUwIiByPSI1MCIgZmlsbD0idXJsKCNncmFkKSIgLz48Y2lyY2xlIGN4PSI1MCIgY3k9IjUwIiByPSI0NCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJyZ2JhKDI1NSwyNTUsMjU1LDAuMjUpIiBzdHJva2Utd2lkdGg9IjEuNSIgLz48Y2lyY2xlIGN4PSI1MCIgY3k9IjUwIiByPSIzOCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJyZ2JhKDI1NSwyNTUsMjU1LDAuMTUpIiBzdHJva2Utd2lkdGg9IjEiIC8+PGNpcmNsZSBjeD0iNTAiIGN5PSI1MCIgcj0iMjgiIGZpbGw9Im5vbmUiIHN0cm9rZT0icmdiYSgyNTUsMjU1LDI1NSwwLjEpIiBzdHJva2Utd2lkdGg9IjEiIC8+PGNpcmNsZSBjeD0iNTAiIGN5PSI1MCIgcj0iOSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJyZ2JhKDI1NSwyNTUsMjU1LDAuMykiIHN0cm9rZS13aWR0aD0iMSIgLz48dGV4dCB4PSI1MCIgeT0iMzgiIGZvbnQtZmFtaWx5PSJzeXN0ZW0tdWksIC1hcHBsZS1zeXN0ZW0sIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTIiIGZvbnQtd2VpZ2h0PSI5MDAiIGZpbGw9IiNmZmZmZmYiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGxldHRlci1zcGFjaW5nPSIxIj5ZT1A8L3RleHQ+PHRleHQgeD0iNTAiIHk9IjcwIiBmb250LWZhbWlseT0ic3lzdGVtLXVpLCAtYXBwbGUtc3lzdGVtLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjEyIiBmb250LXdlaWdodD0iOTAwIiBmaWxsPSIjZmZmZmZmIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBsZXR0ZXItc3BhY2luZz0iMSI+REo8L3RleHQ+PHRleHQgeD0iNTAiIHk9IjIyIiBmb250LWZhbWlseT0ic3lzdGVtLXVpLCAtYXBwbGUtc3lzdGVtLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjQiIGZvbnQtd2VpZ2h0PSI3MDAiIGZpbGw9InJnYmEoMjU1LDI1NSwyNTUsMC44KSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgbGV0dGVyLXNwYWNpbmc9IjIiPlBFUlNPTkFMIE1JWDwvdGV4dD48dGV4dCB4PSI1MCIgeT0iODIiIGZvbnQtZmFtaWx5PSJzeXN0ZW0tdWksIC1hcHBsZS1zeXN0ZW0sIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iNCIgZm9udC13ZWlnaHQ9IjcwMCIgZmlsbD0icmdiYSgyNTUsMjU1LDI1NSwwLjgpIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBsZXR0ZXItc3BhY2luZz0iMiI+QUkgTVVTSUMgRU5HSU5FPC90ZXh0Pjwvc3ZnPg=="
+                    alt="Album Art" class="album-art">
                   <div class="vinyl-center"></div>
                 </div>
                 <canvas id="waveform-visualizer" class="waveform-canvas"></canvas>
@@ -253,7 +264,8 @@
                 <!-- Volume Control -->
                 <div class="volume-container">
                   <button id="btn-mute" class="btn-icon" title="Mute/Unmute">
-                    <svg id="svg-volume" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                    <svg id="svg-volume" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+                      stroke-width="2">
                       <path d="M11 5 6 9H2v6h4l5 4V5zm4 3a5 5 0 0 1 0 8m2.5-12a9 9 0 0 1 0 16"></path>
                     </svg>
                   </button>
@@ -267,7 +279,7 @@
           <!-- RIGHT: Queue & Internet Info -->
           <section class="queue-and-info-section">
             <!-- Up Next Queue -->
-            <div class="card glass-card flex-grow flex flex-col overflow-hidden mb-4">
+            <div class="card glass-card flex flex-col overflow-hidden mb-4">
               <h3 class="card-title">What's Coming Up</h3>
               <div id="coming-up-list" class="coming-up-list">
                 <div class="empty-queue-text">No tracks queued. Add music and hit Play.</div>
@@ -275,7 +287,7 @@
             </div>
 
             <!-- Internet Metadata Enrichment -->
-            <div class="card glass-card enrichment-card flex flex-col overflow-hidden">
+            <div class="card glass-card enrichment-card flex-grow flex flex-col overflow-hidden">
               <div class="card-title-container">
                 <h3 class="card-title">Internet Metadata</h3>
                 <label class="toggle-switch">
@@ -356,15 +368,18 @@
 
       <div style="display: flex; flex-direction: column; gap: 14px;">
         <!-- App Version -->
-        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 10px;">
+        <div
+          style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 10px;">
           <span style="font-size: 0.85rem; color: var(--text-muted);">App Version</span>
           <span style="font-size: 0.85rem; font-weight: 700; color: var(--secondary);">1.0.0</span>
         </div>
 
         <!-- Output Device Select -->
         <div style="display: flex; flex-direction: column; gap: 6px;">
-          <label for="select-output-device" style="font-size: 0.85rem; color: var(--text-muted);">Audio Output Device</label>
-          <select id="select-output-device" style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.06); color: white; padding: 10px; border-radius: 8px; font-family: var(--font-sans); font-size: 0.85rem; outline: none; width: 100%;">
+          <label for="select-output-device" style="font-size: 0.85rem; color: var(--text-muted);">Audio Output
+            Device</label>
+          <select id="select-output-device"
+            style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.06); color: white; padding: 10px; border-radius: 8px; font-family: var(--font-sans); font-size: 0.85rem; outline: none; width: 100%;">
             <option value="default">Default Device</option>
           </select>
         </div>
@@ -372,39 +387,21 @@
         <!-- Crossfade Duration Slider -->
         <div style="display: flex; flex-direction: column; gap: 6px;">
           <div style="display: flex; justify-content: space-between;">
-            <label for="crossfade-slider" style="font-size: 0.85rem; color: var(--text-muted);">Crossfade Duration</label>
-            <span id="crossfade-value" style="font-size: 0.85rem; font-family: var(--font-mono); color: var(--primary-hover);">6s</span>
+            <label for="crossfade-slider" style="font-size: 0.85rem; color: var(--text-muted);">Crossfade
+              Duration</label>
+            <span id="crossfade-value"
+              style="font-size: 0.85rem; font-family: var(--font-mono); color: var(--primary-hover);">6s</span>
           </div>
-          <input type="range" id="crossfade-slider" min="0" max="15" value="6" style="width:100%; height:4px; border-radius:2px; background:rgba(255,255,255,0.1); -webkit-appearance:none; outline:none;">
+          <input type="range" id="crossfade-slider" min="0" max="15" value="10"
+            style="width:100%; height:4px; border-radius:2px; background:rgba(255,255,255,0.1); -webkit-appearance:none; outline:none;">
         </div>
 
-        <!-- Model Download Section -->
-        <div style="display: flex; flex-direction: column; gap: 8px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 14px; margin-top: 6px;">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <label style="font-size: 0.85rem; color: var(--text-muted);">Essentia Audio Engine (Bundled)</label>
-            <span id="model-status-badge" class="badge bpm-badge" style="background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.2); font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; text-transform: uppercase;">Not Downloaded</span>
-          </div>
-          <p style="font-size: 0.75rem; color: var(--text-muted); line-height: 1.3;">
-            Downloading the model (~650 MB) stores it locally in AppData for offline use and faster startup.
-          </p>
-          <button id="btn-download-model" class="btn-secondary w-full" style="padding: 10px; font-size: 0.85rem; margin-top: 4px;">
-            Download Model Files
-          </button>
-          
-          <!-- Download Progress -->
-          <div id="model-download-progress-container" class="hidden" style="display: flex; flex-direction: column; gap: 6px; margin-top: 4px;">
-            <div style="display: flex; justify-content: space-between; font-size: 0.75rem;">
-              <span id="model-download-status" style="color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 70%;">Preparing...</span>
-              <span id="model-download-percentage" style="color: var(--secondary); font-weight: 700;">0%</span>
-            </div>
-            <div class="progress-bar-bg" style="height: 6px; background: rgba(255, 255, 255, 0.05); border-radius: 3px; overflow: hidden;">
-              <div id="model-download-bar" class="progress-bar-fill" style="width: 0%; height: 100%; background: linear-gradient(90deg, var(--primary) 0%, var(--secondary) 100%); border-radius: 3px;"></div>
-            </div>
-          </div>
-
-          <!-- Download Error Message -->
-          <div id="model-download-error-msg" class="hidden" style="font-size: 0.75rem; color: #ef4444; line-height: 1.4; margin-top: 8px; background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.15); padding: 10px; border-radius: 8px;">
-          </div>
+        <!-- Audio Engine Status -->
+        <div
+          style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 14px; margin-top: 6px;">
+          <label style="font-size: 0.85rem; color: var(--text-muted);">Essentia Audio Engine (Bundled)</label>
+          <span id="model-status-badge" class="badge bpm-badge"
+            style="font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; text-transform: uppercase;">Bundled</span>
         </div>
       </div>
     </div>
@@ -412,4 +409,5 @@
 
   <script src="renderer.js"></script>
 </body>
+
 </html>

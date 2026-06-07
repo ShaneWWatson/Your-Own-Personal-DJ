@@ -20,8 +20,8 @@ let state = {
   isPlaying: false,
   isScanning: false,
   folders: [],
-  ollamaStatus: 'checking', // checking, connected, fallback, offline
-  ollamaModel: null,
+  engineStatus: 'checking', // checking, connected, fallback, offline
+  engineModel: null,
   isEnrichmentEnabled: true,
   
   // DJ Settings
@@ -37,12 +37,13 @@ let state = {
 // Target BPM and Key profiles for Moods
 const moodProfiles = {
   chill: { targetBpm: 75, bpmRange: [50, 95], targetGenres: ['ambient', 'lofi', 'chill', 'acoustic', 'classical', 'jazz', 'downtempo', 'folk'] },
-  focus: { targetBpm: 90, bpmRange: [75, 110], targetGenres: ['instrumental', 'classical', 'lofi', 'ambient', 'synthwave', 'study', 'post-rock'] },
-  energy: { targetBpm: 135, bpmRange: [115, 180], targetGenres: ['rock', 'metal', 'grunge', 'punk', 'electronic', 'dance', 'techno', 'hip hop'] },
-  party: { targetBpm: 125, bpmRange: [110, 140], targetGenres: ['pop', 'dance', 'electronic', 'house', 'funk', 'disco', 'hip hop', 'r&b'] }
+  focus: { targetBpm: 90, bpmRange: [75, 110], targetGenres: ['instrumental', 'classical', 'lofi', 'ambient', 'synthwave', 'study', 'post-rock', 'minimal'] },
+  energy: { targetBpm: 140, bpmRange: [120, 190], targetGenres: ['rock', 'metal', 'grunge', 'punk', 'techno', 'drum and bass', 'dubstep', 'hardstyle'] },
+  party: { targetBpm: 124, bpmRange: [110, 145], targetGenres: ['dance', 'house', 'funk', 'disco', 'r&b', 'electro', 'pop'] }
 };
 
-const GENERIC_LABEL_SVG = `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'><defs><linearGradient id='grad' x1='0%' y1='0%' x2='100%' y2='100%'><stop offset='0%' stop-color='%238b5cf6' /><stop offset='100%' stop-color='%23ec4899' /></linearGradient></defs><circle cx='50' cy='50' r='50' fill='url(%23grad)' /><circle cx='50' cy='50' r='44' fill='none' stroke='rgba(255,255,255,0.25)' stroke-width='1.5' /><circle cx='50' cy='50' r='38' fill='none' stroke='rgba(255,255,255,0.15)' stroke-width='1' /><circle cx='50' cy='50' r='28' fill='none' stroke='rgba(255,255,255,0.1)' stroke-width='1' /><circle cx='50' cy='50' r='9' fill='none' stroke='rgba(255,255,255,0.3)' stroke-width='1' /><text x='50' y='38' font-family='system-ui, -apple-system, sans-serif' font-size='12' font-weight='900' fill='%23ffffff' text-anchor='middle' letter-spacing='1'>YOP</text><text x='50' y='70' font-family='system-ui, -apple-system, sans-serif' font-size='12' font-weight='900' fill='%23ffffff' text-anchor='middle' letter-spacing='1'>DJ</text><text x='50' y='22' font-family='system-ui, -apple-system, sans-serif' font-size='4' font-weight='700' fill='rgba(255,255,255,0.8)' text-anchor='middle' letter-spacing='2'>PERSONAL MIX</text><text x='50' y='82' font-family='system-ui, -apple-system, sans-serif' font-size='4' font-weight='700' fill='rgba(255,255,255,0.8)' text-anchor='middle' letter-spacing='2'>AI MUSIC ENGINE</text></svg>`;
+// Base64 encoded generic record label to ensure it loads reliably across all systems
+const GENERIC_LABEL_SVG = `data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDAiIGhlaWdodD0iMTAwIiB2aWV3Qm94PSIwIDAgMTAwIDEwMCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJncmFkIiB4MT0iMCUiIHkxPSIwJSIgeDI9IjEwMCUiIHkyPSIxMDAlIj48c3RvcCBvZmZzZXQ9IjAlIiBzdG9wLWNvbG9yPSIjOGI1Y2Y2IiAvPjxzdG9wIG9mZnNldD0iMTAwJSIgc3RvcC1jb2xvcj0iI2VjNDg5OSIgLz48L2xpbmVhckdyYWRpZW50PjwvZGVmcz48Y2lyY2xlIGN4PSI1MCIgY3k9IjUwIiByPSI1MCIgZmlsbD0idXJsKCNncmFkKSIgLz48Y2lyY2xlIGN4PSI1MCIgY3k9IjUwIiByPSI0NCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJyZ2JhKDI1NSwyNTUsMjU1LDAuMjUpIiBzdHJva2Utd2lkdGg9IjEuNSIgLz48Y2lyY2xlIGN4PSI1MCIgY3k9IjUwIiByPSIzOCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJyZ2JhKDI1NSwyNTUsMjU1LDAuMTUpIiBzdHJva2Utd2lkdGg9IjEiIC8+PGNpcmNsZSBjeD0iMTAwIiBjeT0iNTAiIGN5PSI1MCIgcj0iMjgiIGZpbGw9Im5vbmUiIHN0cm9rZT0icmdiYSgyNTUsMjU1LDI1NSwwLjEpIiBzdHJva2Utd2lkdGg9IjEiIC8+PGNpcmNsZSBjeD0iMTAwIiBjeT0iNTAiIGN5PSI1MCIgcj0iOSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJyZ2JhKDI1NSwyNTUsMjU1LDAuMykiIHN0cm9rZS13aWR0aD0iMSIgLz48dGV4dCB4PSI1MCIgeT0iMzgiIGZvbnQtZmFtaWx5PSJzeXN0ZW0tdWksIC1hcHBsZS1zeXN0ZW0sIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTIiIGZvbnQtd2VpZ2h0PSI5MDAiIGZpbGw9IiNmZmZmZmYiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGxldHRlci1zcGFjaW5nPSIxIj5ZT1A8L3RleHQ+PHRleHQgeD0iMTAwIiB5PSI3MCIgZm9udC1mYW1pbHk9InN5c3RlbS11aSwgLWFwcGxlLXN5c3RlbSwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxMiIgZm9udC13ZWlnaHQ9IjkwMCIgZmlsbD0iI2ZmZmZmZiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgbGV0dGVyLXNwYWNpbmc9IjEiPkRKPC90ZXh0Pjx0ZXh0IHg9IjUwIiB5PSIyMiIgZm9udC1mYW1pbHk9InN5c3RlbS11aSwgLWFwcGxlLXN5c3RlbSwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSI0IiBmb250LXdlaWdodD0iNzAwIiBmaWxsPSJyZ2JhKDI1NSwyNTUsMjU1LDAuOCkiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGxldHRlci1zcGFjaW5nPSIyIj5QRVJTT05BTCBNSVg8L3RleHQ+PHRleHQgeD0iMTAwIiB5PSI4MiIgZm9udC1mYW1pbHk9InN5c3RlbS11aSwgLWFwcGxlLXN5c3RlbSwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSI0IiBmb250LXdlaWdodD0iNzAwIiBmaWxsPSJyZ2JhKDI1NSwyNTUsMjU1LDAuOCkiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGxldHRlci1zcGFjaW5nPSIyIj5BSSBNVVNJQyBFTkdJTkU8L3RleHQ+PC9zdmc+`;
 
 // DOM Elements
 const foldersList = document.getElementById('folders-list');
@@ -126,7 +127,7 @@ canvas.height = 48;
 
 // --- IndexedDB Database Persistence ---
 const DB_NAME = 'YourOwnPersonalDJ_DB';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 function openDB() {
   return new Promise((resolve, reject) => {
@@ -141,10 +142,65 @@ function openDB() {
         trackStore.createIndex('mood', 'mood', { unique: false });
         trackStore.createIndex('bpm', 'bpm', { unique: false });
       }
+      if (!db.objectStoreNames.contains('playHistory')) {
+        const histStore = db.createObjectStore('playHistory', { autoIncrement: true });
+        histStore.createIndex('playedAt', 'playedAt', { unique: false });
+      }
     };
     request.onsuccess = (event) => resolve(event.target.result);
     request.onerror = (event) => reject(event.target.error);
   });
+}
+
+async function dbSaveHistoryEntry(entry) {
+  try {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction('playHistory', 'readwrite');
+      const store = transaction.objectStore('playHistory');
+      store.add(entry);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+  } catch (err) {
+    console.error('Error saving history entry:', err);
+  }
+}
+
+async function dbLoadHistory() {
+  try {
+    const db = await openDB();
+    const all = await new Promise((resolve, reject) => {
+      const tx = db.transaction('playHistory', 'readonly');
+      const req = tx.objectStore('playHistory').getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+    const cutoff = Date.now() - (2 * 60 * 60 * 1000);
+    return all.filter(h => h.playedAt > cutoff);
+  } catch (err) {
+    console.error('Error loading history:', err);
+    return [];
+  }
+}
+
+async function dbPruneHistory() {
+  try {
+    const db = await openDB();
+    const cutoff = Date.now() - (2 * 60 * 60 * 1000);
+    await new Promise((resolve) => {
+      const tx = db.transaction('playHistory', 'readwrite');
+      const index = tx.objectStore('playHistory').index('playedAt');
+      index.openCursor(IDBKeyRange.upperBound(cutoff, true)).onsuccess = (e) => {
+        const cursor = e.target.result;
+        if (cursor) { cursor.delete(); cursor.continue(); }
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch (err) {
+    console.error('Error pruning history:', err);
+  }
 }
 
 async function dbGetFolders() {
@@ -232,7 +288,7 @@ const pendingWorkerRequests = new Map();
 let workerRequestId = 0;
 
 async function initAIWorker() {
-  state.ollamaStatus = 'checking';
+  state.engineStatus = 'checking';
   updateAIStatusUI();
   logConsole('Initializing local AI Web Worker thread...', 'system');
 
@@ -244,11 +300,11 @@ async function initAIWorker() {
     if (type === 'status-update') {
       const { status, model, log, logType } = data;
       if (status) {
-        state.ollamaStatus = status;
+        state.engineStatus = status;
         updateAIStatusUI();
       }
       if (model) {
-        state.ollamaModel = model;
+        state.engineModel = model;
         updateAIStatusUI();
       }
       if (log) {
@@ -342,6 +398,10 @@ function setupAudioEvents() {
         handleCrossfadeEnd();
         break;
 
+      case 'seeked':
+        state.isDraggingSlider = false;
+        break;
+
       case 'log':
         logConsole(payload.message, payload.type);
         break;
@@ -353,16 +413,6 @@ function setupAudioEvents() {
   });
 }
 
-// Queue transition triggered from the audio process
-async function playNextTrackFromQueue() {
-  if (state.queue.length > 0) {
-    const nextItem = state.queue.shift();
-    const track = state.library.find(t => t.path === nextItem.path);
-    renderQueue();
-    sendAudioCommand('start-crossfade', { nextTrack: track });
-  }
-}
-
 function handleCrossfadeStart(track) {
   // Sync state
   state.currentTrack = track;
@@ -370,11 +420,9 @@ function handleCrossfadeStart(track) {
   updateNowPlayingUI();
 
   // Save history
-  state.history.push({
-    path: track.path,
-    artist: track.artist,
-    playedAt: Date.now()
-  });
+  const histEntry = { path: track.path, artist: track.artist, playedAt: Date.now() };
+  state.history.push(histEntry);
+  dbSaveHistoryEntry(histEntry);
   if (state.history.length > 100) state.history.shift();
 
   if (state.isEnrichmentEnabled) {
@@ -407,16 +455,23 @@ window.addEventListener('load', async () => {
   }
   
   if (foldersListDB.length > 0 || tracksDB.length > 0) {
-    state.library = tracksDB;
-    state.folders = foldersListDB;
+    state.library = tracksDB.map(t => {
+      t.path = normalizePath(t.path);
+      delete t.sonicProfile; // force re-classification with updated rules
+      return sanitizeLibraryTrack(t);
+    });
+    state.folders = foldersListDB.map(normalizePath);
     logConsole(`Loaded ${state.library.length} tracks from IndexedDB cache.`, 'success');
   } else {
     // Database is empty. Check if we need to migrate from legacy library.md
     logConsole('Checking for legacy library.md database for migration...', 'system');
     const migrated = await window.api.loadLibrary();
     if (migrated) {
-      state.folders = migrated.folders || [];
-      state.library = migrated.library || [];
+      state.folders = (migrated.folders || []).map(normalizePath);
+      state.library = (migrated.library || []).map(t => {
+        t.path = normalizePath(t.path);
+        return sanitizeLibraryTrack(t);
+      });
       
       // Save folders and tracks to IndexedDB
       for (const f of state.folders) {
@@ -429,10 +484,23 @@ window.addEventListener('load', async () => {
       // Attempt to load system default music folder
       const systemMusic = await window.api.getSystemMusicFolder();
       if (systemMusic) {
-        state.folders.push(systemMusic);
-        await dbAddFolder(systemMusic);
+        const normSystemMusic = normalizePath(systemMusic);
+        state.folders.push(normSystemMusic);
+        await dbAddFolder(normSystemMusic);
       }
     }
+  }
+
+  // Restore play history so cooldowns survive close/reopen
+  try {
+    const savedHistory = await dbLoadHistory();
+    state.history = savedHistory;
+    if (savedHistory.length > 0) {
+      logConsole(`Restored ${savedHistory.length} recent play history entries.`, 'system');
+    }
+    dbPruneHistory(); // fire-and-forget cleanup of entries older than 2 hours
+  } catch (err) {
+    console.error('Failed to load play history:', err);
   }
 
   renderFoldersList();
@@ -445,6 +513,9 @@ window.addEventListener('load', async () => {
 
   // Set up tabs triggers
   setUpTabs();
+
+  // Set up mood selector
+  setUpMoodSelector();
 
   // Set up audio player triggers (UI side)
   setUpAudioPlayerControls();
@@ -506,14 +577,6 @@ function setUpSettings() {
       settingsModal.classList.add('hidden');
     }
   });
-
-  // Audio Engine Panel (Essentia.js ships bundled — there is nothing to download).
-  // The legacy "download model" controls are hidden; the panel just reports readiness.
-  const btnDownloadModel = document.getElementById('btn-download-model');
-  const downloadProgressContainer = document.getElementById('model-download-progress-container');
-
-  if (btnDownloadModel) btnDownloadModel.classList.add('hidden');
-  if (downloadProgressContainer) downloadProgressContainer.classList.add('hidden');
 
   crossfadeSlider.addEventListener('input', (e) => {
     const val = parseInt(e.target.value);
@@ -578,36 +641,79 @@ async function updateOutputDevices() {
   }
 }
 
-function parseLLMJSON(text) {
-  let cleaned = text.trim();
-  if (cleaned.startsWith('```')) {
-    cleaned = cleaned.replace(/^```(?:json)?\n/, '');
-    cleaned = cleaned.replace(/\n```$/, '');
-    cleaned = cleaned.trim();
-  }
-  try {
-    return JSON.parse(cleaned);
-  } catch (e) {
-    const match = cleaned.match(/\{[\s\S]*\}/);
-    if (match) {
-      return JSON.parse(match[0]);
-    }
-    throw e;
-  }
-}
-
 // --- Folder Management & Library Scanning ---
 btnAddFolder.addEventListener('click', async () => {
   const folderPath = await window.api.selectFolder();
-  if (folderPath && !state.folders.includes(folderPath)) {
-    state.folders.push(folderPath);
-    renderFoldersList();
-    
-    await dbAddFolder(folderPath);
-    checkScanButtonState();
-    logConsole(`Added directory: ${folderPath}`, 'system');
+  if (folderPath) {
+    const normalizedFolder = normalizePath(folderPath);
+    if (!state.folders.includes(normalizedFolder)) {
+      state.folders.push(normalizedFolder);
+      renderFoldersList();
+      
+      await dbAddFolder(normalizedFolder);
+      checkScanButtonState();
+      logConsole(`Added directory: ${normalizedFolder}`, 'system');
+    }
   }
 });
+
+function updateAIStatusUI() {
+  const statusMap = {
+    checking: { label: 'Checking...', cls: 'fallback' },
+    connected: { label: 'Connected', cls: 'connected' },
+    fallback: { label: 'Heuristic Mode', cls: 'fallback' },
+    offline: { label: 'Offline', cls: 'offline' }
+  };
+  const s = statusMap[state.engineStatus] || statusMap.checking;
+  aiStatusBadge.className = `ai-status-badge ${s.cls}`;
+  aiStatusText.innerText = s.label;
+  aiModelName.innerText = state.engineModel || 'Loading local model...';
+}
+
+function renderLibraryTable() {
+  const query = (librarySearch.value || '').toLowerCase().trim();
+  const tracks = query
+    ? state.library.filter(t =>
+        (t.title || '').toLowerCase().includes(query) ||
+        (t.artist || '').toLowerCase().includes(query) ||
+        (t.genre || '').toLowerCase().includes(query)
+      )
+    : state.library;
+
+  if (tracks.length === 0) {
+    libraryTableBody.innerHTML = `<tr><td colspan="9" class="text-center">${
+      query ? 'No tracks match your search.' : 'No tracks in library yet. Add folders and scan.'
+    }</td></tr>`;
+    return;
+  }
+
+  libraryTableBody.innerHTML = tracks.map(track => {
+    const isPlaying = state.currentTrack && state.currentTrack.path === track.path;
+    const mood = track.mood ? track.mood.charAt(0).toUpperCase() + track.mood.slice(1) : '—';
+    return `<tr class="${isPlaying ? 'playing' : ''}" data-path="${escapeHtml(track.path)}" style="cursor:pointer">
+      <td>${escapeHtml(track.title || '—')}</td>
+      <td>${escapeHtml(track.artist || '—')}</td>
+      <td>${escapeHtml(track.album || '—')}</td>
+      <td>${escapeHtml(track.genre || '—')}</td>
+      <td>${track.bpm ? track.bpm : '—'}</td>
+      <td>${escapeHtml(track.key || '—')}</td>
+      <td>${escapeHtml(mood)}</td>
+      <td>${formatDuration(track.duration || 0)}</td>
+      <td>${escapeHtml((track.format || '').toUpperCase())}</td>
+    </tr>`;
+  }).join('');
+
+  libraryTableBody.querySelectorAll('tr[data-path]').forEach(row => {
+    row.addEventListener('click', () => {
+      const track = state.library.find(t => t.path === row.dataset.path);
+      if (track) playTrack(track);
+    });
+  });
+}
+
+if (librarySearch) {
+  librarySearch.addEventListener('input', () => renderLibraryTable());
+}
 
 function renderFoldersList() {
   foldersList.innerHTML = '';
@@ -631,7 +737,7 @@ function renderFoldersList() {
       state.folders.splice(idx, 1);
       renderFoldersList();
       
-      await dbRemoveFolder(folder);
+      await dbRemoveFolder(normalizePath(folder));
       checkScanButtonState();
       logConsole(`Removed directory: ${folder}`, 'system');
     });
@@ -652,9 +758,35 @@ function checkScanButtonState() {
   }
 }
 
-btnStartScan.addEventListener('click', () => {
+btnStartScan.addEventListener('click', async () => {
   if (state.isScanning) return;
   
+  logConsole('Starting full library re-analysis for accuracy...', 'info');
+
+  // Reset metadata for ALL tracks to ensure accuracy across classification, loudness, and art.
+  for (const track of state.library) {
+    track.path = normalizePath(track.path);
+    track.bpm = null;
+    track.key = null;
+    track.mood = null;
+    track.beatOffset = null;
+    track.loudness = null;
+    track.undecodable = false;
+    delete track.isHeuristic;
+
+    // We only clear albumArt if it's NOT a high-quality external URL or long base64 string
+    // to give the system a chance to re-fetch/embed it if it was missing or low-res.
+    if (!track.albumArt || track.albumArt.length < 500) {
+      track.albumArt = null;
+    }
+
+    await dbSaveTrack(track);
+  }
+
+  logConsole(`Reset ${state.library.length} tracks for full Essentia & Vibe re-analysis.`, 'success');
+  renderLibraryTable();
+  updateAnalysisProgress();
+
   state.isScanning = true;
   btnStartScan.setAttribute('disabled', 'true');
   btnStartScan.classList.add('disabled');
@@ -680,6 +812,8 @@ window.api.onScanProgress(async (data) => {
   scanPercentage.innerText = `${percent}%`;
   scanStatusText.innerText = `Scanned ${current}/${total} files`;
 
+  track.path = normalizePath(track.path);
+
   if (state.scannedPaths) {
     state.scannedPaths.add(track.path);
   }
@@ -697,6 +831,12 @@ window.api.onScanProgress(async (data) => {
     }
     if ((track.beatOffset === undefined || track.beatOffset === null) && state.library[existingIdx].beatOffset !== null && state.library[existingIdx].beatOffset !== undefined) {
       track.beatOffset = state.library[existingIdx].beatOffset;
+    }
+    if (state.library[existingIdx].undecodable) {
+      track.undecodable = true;
+    }
+    if (!track.albumArt && state.library[existingIdx].albumArt) {
+      track.albumArt = state.library[existingIdx].albumArt;
     }
     state.library[existingIdx] = track;
   } else {
@@ -721,11 +861,11 @@ window.api.onScanComplete(async (data) => {
   
   // Clean up dead/deleted paths that were not found in the scan
   if (state.scannedPaths) {
-    const deadTracks = state.library.filter(t => !state.scannedPaths.has(t.path));
-    const deadPaths = deadTracks.map(t => t.path);
+    const deadTracks = state.library.filter(t => !state.scannedPaths.has(normalizePath(t.path)));
+    const deadPaths = deadTracks.map(t => normalizePath(t.path));
     
     await dbDeleteTracksBatch(deadPaths);
-    state.library = state.library.filter(t => state.scannedPaths.has(t.path));
+    state.library = state.library.filter(t => state.scannedPaths.has(normalizePath(t.path)));
     delete state.scannedPaths;
   }
   
@@ -750,7 +890,18 @@ function updateAnalysisProgress() {
   }
 
   const total = state.library.length;
-  const completed = state.library.filter(t => t.bpm !== null && t.key !== null && t.mood !== undefined && t.mood !== null && t.beatOffset !== undefined && t.beatOffset !== null).length;
+  // A track is "completed" if it has metadata OR is marked as undecodable
+  const completed = state.library.filter(t =>
+    t.undecodable || (
+      t.bpm !== null &&
+      t.key !== null &&
+      t.mood !== undefined &&
+      t.mood !== null &&
+      t.beatOffset !== undefined &&
+      t.beatOffset !== null &&
+      (t.loudness !== undefined && t.loudness !== null || t.replaygainTrackGain !== undefined && t.replaygainTrackGain !== null)
+    )
+  ).length;
   const remaining = total - completed;
 
   if (remaining > 0) {
@@ -759,7 +910,7 @@ function updateAnalysisProgress() {
     analysisProgressBar.style.width = `${percent}%`;
     analysisPercentage.innerText = `${percent}%`;
     
-    const engineType = state.ollamaStatus === 'connected' ? 'Essentia' : 'Heuristics';
+    const engineType = state.engineStatus === 'connected' ? 'Essentia' : 'Heuristics';
     analysisStatusText.innerText = `Analyzing metadata & transients (${engineType}): ${completed}/${total} files`;
   } else {
     analysisProgressContainer.classList.add('hidden');
@@ -771,24 +922,37 @@ async function backgroundMetadataProcessor() {
 
   if (isProcessingMetadata || state.library.length === 0) return;
   
-  const track = state.library.find(t => t.bpm === null || t.key === null || t.mood === undefined || t.mood === null || t.beatOffset === undefined || t.beatOffset === null);
+  // Find a track that hasn't been analyzed and isn't marked as undecodable
+  const track = state.library.find(t =>
+    !t.undecodable && (
+      t.bpm === null ||
+      t.key === null ||
+      t.mood === undefined ||
+      t.mood === null ||
+      t.beatOffset === undefined ||
+      t.beatOffset === null ||
+      (t.loudness === undefined && t.loudness === null && t.replaygainTrackGain === undefined && t.replaygainTrackGain === null)
+    )
+  );
   if (!track) return;
 
   isProcessingMetadata = true;
-  logConsole(`Analyzing "${track.title}" with Essentia.js audio analysis...`, 'info');
+  track.path = normalizePath(track.path);
 
   let bpm = track.bpm;
   let key = track.key;
   let mood = track.mood;
   let beatOffset = track.beatOffset;
 
-  const needsAnalysis = (bpm === null || key === null || mood === undefined || mood === null || beatOffset === undefined || beatOffset === null);
+  const needsAnalysis = (bpm === null || key === null || mood === undefined || mood === null || beatOffset === undefined || beatOffset === null || (track.loudness === undefined || track.loudness === null));
 
   if (needsAnalysis) {
-    // 1. Real audio analysis via Essentia.js.
-    //    The renderer decodes the waveform (it has OfflineAudioContext); the
-    //    worker runs Essentia on the raw samples and returns BPM/Key/Mood/offset.
-    if (state.ollamaStatus === 'connected' && aiWorker) {
+    let essentiaSuccess = false;
+    
+    if (track.undecodable) {
+      logConsole(`Skipping audio analysis for undecodable track "${track.title}" (using heuristics)`, 'info');
+    } else if (aiWorker) {
+      logConsole(`Analyzing "${track.title}" with Essentia.js audio analysis...`, 'info');
       try {
         const decoded = await decodeTrackToMono(track.path);
         const result = await sendWorkerRequest(
@@ -801,12 +965,20 @@ async function backgroundMetadataProcessor() {
         if (result.key) key = result.key;
         if (result.mood) mood = result.mood;
         if (result.beatOffset !== undefined && result.beatOffset !== null) beatOffset = result.beatOffset;
+        if (result.rms !== undefined) track.loudness = result.rms;
 
+        essentiaSuccess = true;
         logConsole(`Essentia analyzed "${track.title}": BPM ${bpm}, Key ${key}, Mood ${mood} (beat offset ${beatOffset}s)`, 'ai');
       } catch (err) {
         logConsole(`Essentia analysis failed for "${track.title}": ${err.message}. Falling back.`, 'warning');
+        // Mark as undecodable so we don't get stuck on this file in the background processor
+        if (err.message.includes('decoding failed') || err.message.includes('decode')) {
+          track.undecodable = true;
+        }
       }
     }
+
+    const markedHeuristic = !essentiaSuccess;
 
     // 2. Heuristic fallback for any field Essentia couldn't determine.
     if (bpm === null || key === null || mood === undefined || mood === null) {
@@ -820,17 +992,34 @@ async function backgroundMetadataProcessor() {
     // 3. If beat offset is still missing (Essentia unavailable), use the
     //    built-in Web Audio transient detector as a last resort.
     if (beatOffset === undefined || beatOffset === null) {
-      logConsole(`Running fallback transient beat detection for "${track.title}"...`, 'info');
-      try {
-        const audioAnalysis = await runTransientAnalysis(track.path, bpm);
-        beatOffset = audioAnalysis.beatOffset;
-        if (audioAnalysis.bpm && (!bpm || bpm === 100)) {
-          bpm = audioAnalysis.bpm;
-        }
-      } catch (err) {
-        logConsole(`Transient analysis failed for "${track.title}": ${err.message}`, 'warning');
+      if (track.undecodable) {
         beatOffset = 0;
+      } else {
+        logConsole(`Running fallback transient beat detection for "${track.title}"...`, 'info');
+        try {
+          const audioAnalysis = await runTransientAnalysis(track.path, bpm);
+          beatOffset = audioAnalysis.beatOffset;
+          if (audioAnalysis.bpm && (!bpm || bpm === 100)) {
+            bpm = audioAnalysis.bpm;
+          }
+        } catch (err) {
+          logConsole(`Transient analysis failed for "${track.title}": ${err.message}`, 'warning');
+          if (err.message.includes('decoding failed') || err.message.includes('decode')) {
+            track.undecodable = true;
+          }
+          beatOffset = 0;
+        }
       }
+    }
+
+    if (markedHeuristic) {
+      track.isHeuristic = true;
+      // Ensure loudness is set even if analysis failed to prevent loop hangs
+      if (track.loudness === undefined || track.loudness === null) {
+        track.loudness = 0.10; // Default neutral loudness
+      }
+    } else {
+      delete track.isHeuristic;
     }
   }
 
@@ -840,15 +1029,54 @@ async function backgroundMetadataProcessor() {
   track.mood = mood;
   track.beatOffset = beatOffset;
   
+  // 4. Background Album Art Fetching (if missing)
+  let artworkToEmbed = null;
+  if (!track.albumArt || track.albumArt.length < 500) {
+    try {
+      logConsole(`Fetching missing album art for "${track.title}" from MusicBrainz...`, 'info');
+      const artistClean = track.artist.replace(/feat\..*/i, '').replace(/ft\..*/i, '').trim();
+      const query = `artist:"${artistClean}" AND recording:"${track.title}"`;
+      const url = `https://musicbrainz.org/ws/2/recording/?query=${encodeURIComponent(query)}&fmt=json`;
+
+      const response = await fetch(url, { headers: { 'User-Agent': 'YourOwnPersonalDJ/1.0.0' } });
+      if (response.ok) {
+        const data = await response.json();
+        const recordings = data.recordings || [];
+        if (recordings.length > 0 && recordings[0].releases && recordings[0].releases.length > 0) {
+          const releaseId = recordings[0].releases[0].id;
+          const caaUrl = `https://coverartarchive.org/release/${releaseId}/front-250`;
+
+          // Fetch the actual image bytes (follows the archive.org redirect)
+          const imgResp = await fetch(caaUrl);
+          if (imgResp.ok) {
+            const blob = await imgResp.blob();
+            const dataUrl = await new Promise(resolve => {
+              const reader = new FileReader();
+              reader.onloadend = () => resolve(reader.result);
+              reader.readAsDataURL(blob);
+            });
+            if (dataUrl && dataUrl.length > 500) {
+              track.albumArt = dataUrl;  // store as base64 — no redirect needed for display
+              artworkToEmbed = dataUrl;
+              logConsole(`Found album art for "${track.title}" on MusicBrainz/CAA.`, 'success');
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(`Art fetch failed for ${track.title}:`, err);
+    }
+  }
+
   // Write ID3 tags back to file in main process (if MP3)
-  if (track.format.toLowerCase() === 'mp3') {
-    const res = await window.api.writeTags(track.path, bpm, key);
+  if (track.format.toLowerCase() === 'mp3' && !track.undecodable) {
+    const res = await window.api.writeTags(track.path, bpm, key, artworkToEmbed);
     if (res.success) {
-      logConsole(`Successfully wrote ID3 tags to file: ${track.title}`, 'success');
+      logConsole(`Successfully wrote tags (and art) to file: ${track.title}`, 'success');
     } else {
       const isLocked = res.code === 'EBADF' || res.code === 'EBUSY' || res.code === 'EPERM' || (res.error && res.error.includes('descriptor'));
       if (isLocked) {
-        logConsole(`Could not write ID3 tags directly (file is currently in use/playing): ${track.title}`, 'info');
+        logConsole(`Could not write ID3 tags directly (file is currently in use): ${track.title}`, 'info');
       } else {
         logConsole(`Failed to write tags: ${res.error}`, 'warning');
       }
@@ -862,268 +1090,394 @@ async function backgroundMetadataProcessor() {
   if (state.currentTrack && state.currentTrack.path === track.path) {
     state.currentTrack = track;
     updateNowPlayingUI();
+    // Push updated loudness/replaygain to audio-renderer so gain is corrected live
+    sendAudioCommand('update-normalization', { track });
   }
+
+  // Attempt to optimize the current queue with this freshly analyzed track
+  tryQueueOptimization(track);
 
   isProcessingMetadata = false;
 }
 
-function getHeuristicMetadata(track) {
-  const genre = track.genre.toLowerCase();
-  let bpm = 100;
-  let key = 'C Maj';
-  let mood = 'chill';
-  
-  if (genre.includes('ambient') || genre.includes('classical')) {
-    bpm = 70;
-    mood = 'chill';
-  } else if (genre.includes('lofi') || genre.includes('chill') || genre.includes('downtempo')) {
-    bpm = 80;
-    mood = 'chill';
-  } else if (genre.includes('focus') || genre.includes('acoustic') || genre.includes('jazz') || genre.includes('folk')) {
-    bpm = 90;
-    mood = 'focus';
-  } else if (genre.includes('pop') || genre.includes('r&b') || genre.includes('funk')) {
-    bpm = 115;
-    mood = 'party';
-  } else if (genre.includes('house') || genre.includes('techno') || genre.includes('dance') || genre.includes('disco')) {
-    bpm = 125;
-    mood = 'party';
-  } else if (genre.includes('rock') || genre.includes('grunge') || genre.includes('punk')) {
-    bpm = 130;
-    mood = 'energy';
-  } else if (genre.includes('metal')) {
-    bpm = 145;
-    mood = 'energy';
-  }
-  
-  const keys = ['C Maj', 'A Min', 'G Maj', 'E Min', 'D Maj', 'B Min', 'A Maj', 'F# Min', 'F Maj', 'D Min', 'Bb Maj', 'G Min'];
-  const charCodeSum = track.title.split('').reduce((sum, ch) => sum + ch.charCodeAt(0), 0);
-  key = keys[charCodeSum % keys.length];
+/**
+ * Proactively improves the queue as new tracks are scanned and analyzed.
+ * If the new track is a significantly better match than a track currently in the
+ * lookahead queue, it swaps them out to ensure the highest quality mix.
+ */
+function tryQueueOptimization(newTrack) {
+  if (state.queue.length === 0 || !state.currentTrack) return;
 
-  return { bpm, key, mood };
+  // 1. Basic eligibility checks
+  if (state.queue.some(q => q.path === newTrack.path)) return; // Already in queue
+  if (!doesTrackMatchMood(newTrack, state.mood)) return;
+  if (!isArtistAllowed(newTrack.artist) || !isSongAllowed(newTrack.path)) return;
+
+  const currentBpm = state.currentTrack?.bpm || 100;
+  const currentGenre = state.currentTrack?.genre || 'unknown';
+  const currentKey = state.currentTrack?.key || 'C Maj';
+
+  const newScore = getHeuristicScore(newTrack, currentBpm, currentGenre, currentKey);
+
+  // 2. Find the lowest scoring track currently in the queue
+  let lowestScore = Infinity;
+  let lowestIdx = -1;
+
+  for (let i = 0; i < state.queue.length; i++) {
+    const qItem = state.queue[i];
+    const qTrack = state.library.find(t => t.path === qItem.path);
+    if (!qTrack) continue;
+
+    const qScore = getHeuristicScore(qTrack, currentBpm, currentGenre, currentKey);
+    if (qScore < lowestScore) {
+      lowestScore = qScore;
+      lowestIdx = i;
+    }
+  }
+
+  // 3. If new track is a "Better Match" (threshold: +100 points)
+  if (lowestIdx !== -1 && newScore > (lowestScore + 100)) {
+    const oldTrack = state.library.find(t => t.path === state.queue[lowestIdx].path);
+    logConsole(`Mix Optimized: Freshly scanned "${newTrack.title}" is a better fit than "${oldTrack?.title || 'queued track'}". Swapping...`, 'ai');
+
+    let reason = `Discovered a superior ${newTrack.genre} transition for the ${state.mood} vibe.`;
+    const bpmDiff = Math.abs((newTrack.bpm || 100) - currentBpm);
+    if (bpmDiff < 10) {
+      reason = `Spotted a closer tempo match at ${newTrack.bpm} BPM with "${newTrack.title}".`;
+    } else if (newTrack.key === currentKey) {
+      reason = `Optimized harmonic flow with "${newTrack.title}" in ${newTrack.key}.`;
+    }
+
+    state.queue[lowestIdx] = {
+      path: newTrack.path,
+      reason: reason
+    };
+    renderQueue();
+  }
 }
 
-// Helper to determine if a track matches a specific mood
+// --- Sonic DNA Framework ---
+// This framework groups music into "Vibe Tiers" to prevent Contextual Whiplash.
+const SONIC_PROFILES = {
+  INTIMATE: {
+    artists: ['bob bennett', 'bebo norman', 'eli', 'fernando ortega', 'leigh nash', 'grant-lee phillips', 'margaret cho'],
+    keywords: ['acoustic', 'ballad', 'piano', 'soft', 'peace', 'sparrow', 'still', 'solo', 'storyteller'],
+    allowedMoods: ['chill', 'focus'],
+    compatibility: ['INTIMATE', 'STEADY_CCM']
+  },
+  STEADY_CCM: {
+    artists: ['chris tomlin', 'lauren daigle', 'brian doerksen', 'sixpence', 'barlowgirl', 'lenny leblanc', 'don moen'],
+    keywords: ['worship', 'praise', 'noel', 'hark', 'herald', 'angels', 'cathedral', 'psalm', 'hymn'],
+    allowedMoods: ['focus', 'uplifting'],
+    compatibility: ['INTIMATE', 'STEADY_CCM', 'CLASSIC_POP']
+  },
+  CLASSIC_POP: {
+    artists: ['the police', 'kansas', 'u2', 'r.e.m.', 'talking heads', 'dire straits', 'fleetwood mac', 'bryan duncan', 'vigilantes of love', 'blue oyster cult', 'b.o.c.', 'little richard', 'smalltown poets'],
+    keywords: ['new wave', 'pop rock', 'classic rock', 'every breath', 'gold', 'heart', 'day'],
+    allowedMoods: ['uplifting', 'energy'],
+    compatibility: ['STEADY_CCM', 'CLASSIC_POP', 'DRIVING_ALT']
+  },
+  DRIVING_ALT: {
+    artists: ['all star united', 'paramore', 'boys like girls', 'powderfinger', 'shaded red', 'margaret becker', 'echoing green', 'beanbag'],
+    keywords: ['alternative', 'emo', 'pop-punk', 'grunge', 'thunder', 'misery', 'caught', 'scene'],
+    allowedMoods: ['energy', 'party'],
+    compatibility: ['CLASSIC_POP', 'DRIVING_ALT', 'HEAVY_ROCK']
+  },
+  HEAVY_ROCK: {
+    artists: ['petra', 'guardian', 'mastedon', 'whiteheart', 'creed', 'blindside'],
+    keywords: ['hard rock', 'metal', 'angel of light', 'state of mine', 'replay', 'arms wide open'],
+    allowedMoods: ['energy'],
+    compatibility: ['DRIVING_ALT', 'HEAVY_ROCK', 'BUSY_INDUSTRIAL']
+  },
+  BUSY_INDUSTRIAL: {
+    artists: ['ap2', 'frank klepacki', 'antidote', 'jarrid mendelson', 'battlecross'],
+    keywords: ['industrial', 'mechanical', 'rage', 'fight', 'boss', 'valve', 'gloom', 'destroy', 'carbine', 'unmoved mover'],
+    allowedMoods: ['energy'],
+    compatibility: ['HEAVY_ROCK', 'BUSY_INDUSTRIAL', 'BIG_BEAT']
+  },
+  BIG_BEAT: {
+    artists: ['midival punditz', 'the crystal method', 'prodigy', 'chemical brothers', 'world wide message tribe', 'seafield', 'ultrabeat', 'beastie boys'],
+    keywords: ['techno', 'electronica', 'atomizer', 'jumping', 'house of god', 'manchester', 'truth is out there', 'hip hop', 'rap'],
+    allowedMoods: ['party', 'energy'],
+    compatibility: ['BUSY_INDUSTRIAL', 'BIG_BEAT', 'DANCE_FLOOR']
+  },
+  DANCE_FLOOR: {
+    artists: ['dj remy', 'kaskade', 'ultrabeat', 'robert miles', 'situation', 'matthew dear'],
+    keywords: ['trance', 'house', 'dance', 'club', 'children', 'backstabber'],
+    allowedMoods: ['party'],
+    compatibility: ['BIG_BEAT', 'DANCE_FLOOR']
+  },
+  TRADITIONAL: {
+    artists: ['folk like us', 'benny goodman', 'vivaldi', 'sibelius', 'london philharmonic', 'carola'],
+    keywords: ['jig', 'reel', 'polka', 'hornpipe', 'swing', 'big band', 'spring', 'four seasons', 'allegro', 'finlandia', 'carol'],
+    allowedMoods: ['party', 'uplifting'],
+    compatibility: ['TRADITIONAL', 'CLASSIC_POP']
+  }
+};
+
+/**
+ * Tests whether a term appears as a whole word (or phrase) in text.
+ * Escapes regex special characters so artist/keyword strings are safe.
+ */
+function wordMatch(text, term) {
+  try {
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp('\\b' + escaped + '\\b', 'i').test(text);
+  } catch (e) {
+    return text.includes(term);
+  }
+}
+
+/**
+ * Determines the Sonic Profile of a track based on artist and keywords.
+ * Caches the result on the track object for performance.
+ */
+function getSonicProfile(track) {
+  if (track.sonicProfile) return track.sonicProfile;
+
+  const artist = (track.artist || '').toLowerCase();
+  const trackTitle = (track.title || '').toLowerCase();
+  const genre = (track.genre || '').toLowerCase();
+  const text = (artist + ' ' + trackTitle + ' ' + genre).toLowerCase();
+
+  let foundKey = 'CLASSIC_POP'; // Default fallback
+
+  // 1. Artist Match (Highest Priority) — whole-word to avoid 'eli' matching 'melissa'
+  for (const [key, profile] of Object.entries(SONIC_PROFILES)) {
+    if (profile.artists.some(a => wordMatch(artist, a))) {
+      foundKey = key;
+      break;
+    }
+  }
+
+  if (foundKey === 'CLASSIC_POP') {
+    // 2. Keyword Match — whole-word to prevent 'day'→'monday', 'heart'→'sweetheart', etc.
+    for (const [key, profile] of Object.entries(SONIC_PROFILES)) {
+      if (profile.keywords.some(k => wordMatch(text, k))) {
+        foundKey = key;
+        break;
+      }
+    }
+  }
+
+  if (foundKey === 'CLASSIC_POP') {
+    // 3. Genre / text fallback — expanded to cover folk, ambient, jazz, etc.
+    if (wordMatch(text, 'metal') || wordMatch(text, 'hardcore') || wordMatch(text, 'hard rock')) {
+      foundKey = 'HEAVY_ROCK';
+    } else if (wordMatch(text, 'worship') || wordMatch(text, 'christian') || wordMatch(text, 'gospel') || wordMatch(text, 'hymn') || wordMatch(text, 'praise')) {
+      foundKey = 'STEADY_CCM';
+    } else if (wordMatch(text, 'folk') || wordMatch(text, 'acoustic') || wordMatch(text, 'singer-songwriter') || wordMatch(text, 'ambient') || wordMatch(text, 'new age')) {
+      foundKey = 'INTIMATE';
+    } else if (wordMatch(text, 'jazz') || wordMatch(text, 'blues') || wordMatch(text, 'swing') || wordMatch(text, 'big band') || wordMatch(text, 'classical') || wordMatch(text, 'orchestral')) {
+      foundKey = 'TRADITIONAL';
+    } else if (wordMatch(text, 'punk') || wordMatch(text, 'alternative') || wordMatch(text, 'alt-rock') || wordMatch(text, 'emo') || wordMatch(text, 'country rock')) {
+      foundKey = 'DRIVING_ALT';
+    } else if (wordMatch(text, 'trance') || wordMatch(text, 'house') || wordMatch(text, 'club') || wordMatch(text, 'edm')) {
+      foundKey = 'DANCE_FLOOR';
+    } else if (wordMatch(text, 'electronic') || wordMatch(text, 'techno') || wordMatch(text, 'hip hop') || wordMatch(text, 'hip-hop') || wordMatch(text, 'rap')) {
+      foundKey = 'BIG_BEAT';
+    } else if (wordMatch(text, 'country') || wordMatch(text, 'bluegrass') || wordMatch(text, 'celtic') || wordMatch(text, 'irish')) {
+      foundKey = 'TRADITIONAL';
+    }
+  }
+
+  track.sonicProfile = foundKey;
+  return foundKey;
+}
+
 function doesTrackMatchMood(track, mood) {
   if (!track) return false;
-  
-  if (mood === 'custom') {
+  const sMood = mood.toLowerCase();
+
+  // Custom mood uses keyword search instead of profile DNA
+  if (sMood === 'custom') {
     if (!state.customMoodPrompt) return true;
     const promptWords = state.customMoodPrompt.toLowerCase().split(' ');
     const searchArea = `${track.title} ${track.artist} ${track.genre} ${track.mood || ''}`.toLowerCase();
     return promptWords.some(w => w.length > 2 && searchArea.includes(w));
   }
-  
-  const sMood = mood.toLowerCase();
-  
-  // If track has no mood, check if its genre matches target genres of active mood profile
-  if (!track.mood) {
-    const profile = moodProfiles[sMood];
-    if (profile && track.genre) {
-      const trackGenre = track.genre.toLowerCase();
-      return profile.targetGenres.some(tg => trackGenre.includes(tg));
-    }
-    return false;
+
+  const profileKey = getSonicProfile(track);
+  const profile = SONIC_PROFILES[profileKey];
+
+  // Rule: Profile must explicitly allow the mood
+  if (profile.allowedMoods.includes(sMood)) return true;
+
+  // Elasticity: Allow cross-over for adjacent styles
+  if (sMood === 'chill') {
+    if (profileKey === 'STEADY_CCM') return true;
+    if (profileKey === 'TRADITIONAL') return true;                        // mellow folk/classical
+    if (profileKey === 'CLASSIC_POP' && (track.bpm || 999) < 90) return true; // slow classics
   }
-  
-  const tMood = track.mood.toLowerCase();
-  if (tMood === sMood) return true;
-  
-  if (sMood === 'energy' && (tMood.includes('energetic') || tMood.includes('upbeat') || tMood.includes('fast') || tMood.includes('intense') || tMood.includes('heavy'))) {
-    return true;
+  if (sMood === 'focus') {
+    if (profileKey === 'INTIMATE') return true;
+    if (profileKey === 'TRADITIONAL') return true;                        // classical for studying
+    if (profileKey === 'STEADY_CCM') return true;
   }
-  if (sMood === 'chill' && (tMood.includes('mellow') || tMood.includes('relax') || tMood.includes('ambient') || tMood.includes('calm') || tMood.includes('soft') || tMood.includes('quiet'))) {
-    return true;
+  if (sMood === 'party') {
+    if (profileKey === 'CLASSIC_POP' && (track.bpm || 0) > 120) return true;
+    if (profileKey === 'TRADITIONAL' && (track.bpm || 0) > 130) return true; // fast jigs/reels
   }
-  if (sMood === 'focus' && (tMood.includes('study') || tMood.includes('concentration') || tMood.includes('steady') || tMood.includes('instrumental') || tMood.includes('calm') || tMood.includes('ambient'))) {
-    return true;
+  if (sMood === 'energy') {
+    if (profileKey === 'DRIVING_ALT') return true;
+    if (profileKey === 'CLASSIC_POP' && (track.bpm || 0) > 140) return true;
   }
-  if (sMood === 'party' && (tMood.includes('dance') || tMood.includes('groove') || tMood.includes('funky') || tMood.includes('upbeat') || tMood.includes('house'))) {
-    return true;
-  }
-  
+
   return false;
 }
 
-// --- DJ Rules & Match Algorithms ---
+function getPrimaryArtist(artist) {
+  if (!artist) return '';
+  return artist.split(/\s+(?:feat\.?|ft\.?|with|&|vs\.?|and)\s+/i)[0].trim().toLowerCase();
+}
+
 function isArtistAllowed(artist) {
   if (!artist || artist === 'Unknown Artist') return true;
-  const now = Date.now();
-  
-  // Scale cooldown time based on library size (at most 20% of library is cooled down)
-  const averageTrackLength = 3.5 * 60 * 1000;
-  const maxCoolDownTracks = Math.max(1, Math.floor(state.library.length * 0.2));
-  const maxCoolDownTime = maxCoolDownTracks * averageTrackLength;
-  
-  const timeLimit = Math.max(2 * 60 * 1000, Math.min(20 * 60 * 1000, maxCoolDownTime));
+  const primary = getPrimaryArtist(artist);
 
-  // (a) Recently PLAYED within the window?
-  const recentPlay = state.history.find(h => h.artist === artist && (now - h.playedAt) < timeLimit);
-  if (recentPlay) return false;
+  // Block if the currently playing track shares the same primary artist
+  if (state.currentTrack && getPrimaryArtist(state.currentTrack.artist) === primary) return false;
 
-  // (b) Already sitting in the lookahead QUEUE?
-  const inQueue = state.queue.some(q => q.artist === artist);
+  // Block if already in the queue under the same primary artist
+  const inQueue = state.queue.some(q => {
+    const t = state.library.find(t => t.path === q.path);
+    return t && getPrimaryArtist(t.artist) === primary;
+  });
   if (inQueue) return false;
 
-  return true;
+  // Block if played 2+ times in the last 20 minutes
+  const twentyMin = 20 * 60 * 1000;
+  const cutoff = Date.now() - twentyMin;
+  const recentCount = state.history.filter(h => getPrimaryArtist(h.artist) === primary && h.playedAt > cutoff).length;
+  return recentCount < 2;
 }
 
 function isSongAllowed(path) {
-  const now = Date.now();
-  
-  // Scale cooldown time based on library size (at most 50% of library is cooled down)
-  const averageTrackLength = 3.5 * 60 * 1000;
-  const maxCoolDownTracks = Math.max(1, Math.floor(state.library.length * 0.5));
-  const maxCoolDownTime = maxCoolDownTracks * averageTrackLength;
-  
-  const timeLimit = Math.max(5 * 60 * 1000, Math.min(60 * 60 * 1000, maxCoolDownTime));
-
-  // (a) Recently PLAYED within the window?
-  const recentPlay = state.history.find(h => h.path === path && (now - h.playedAt) < timeLimit);
-  if (recentPlay) return false;
-
-  // (b) Already in the lookahead QUEUE?
-  const inQueue = state.queue.some(q => q.path === path);
-  if (inQueue) return false;
-
-  return true;
+  const oneHour = 60 * 60 * 1000;
+  const cutoff = Date.now() - oneHour;
+  return !state.history.some(h => h.path === path && h.playedAt > cutoff);
 }
 
-function areGenresCompatible(genre1, genre2) {
-  genre1 = genre1.toLowerCase();
-  genre2 = genre2.toLowerCase();
-  
-  if (genre1 === 'unknown' || genre2 === 'unknown' || genre1 === genre2) return true;
-  
-  const mildGenres = ['ambient', 'classical', 'orchestral', 'opera', 'lofi', 'acoustic', 'study', 'folk', 'downtempo', 'jazz', 'new age', 'meditative', 'chillout'];
-  const heavyGenres = ['metal', 'heavy metal', 'death metal', 'thrash metal', 'hardcore', 'punk', 'grunge', 'hard rock', 'industrial', 'thrash', 'screamo'];
-  
-  const isMild1 = mildGenres.some(g => genre1.includes(g));
-  const isMild2 = mildGenres.some(g => genre2.includes(g));
-  
-  const isHeavy1 = heavyGenres.some(g => genre1.includes(g));
-  const isHeavy2 = heavyGenres.some(g => genre2.includes(g));
-  
-  if ((isMild1 && isHeavy2) || (isHeavy1 && isMild2)) {
-    return false;
+function weightedRandomPick(scoredCandidates) {
+  if (!scoredCandidates || scoredCandidates.length === 0) return null;
+  // Shift scores so the minimum is 1, then use as weights
+  const minScore = Math.min(...scoredCandidates.map(c => c.score));
+  const shifted = scoredCandidates.map(c => ({ track: c.track, weight: Math.max(1, c.score - minScore + 1) }));
+  const total = shifted.reduce((sum, c) => sum + c.weight, 0);
+  let rand = Math.random() * total;
+  for (const c of shifted) {
+    rand -= c.weight;
+    if (rand <= 0) return c.track;
   }
-  
-  return true;
+  return shifted[shifted.length - 1].track;
 }
 
-// --- Queue Builder ---
+const QUEUE_LOOKAHEAD = 3;
+
 async function fillQueue() {
   if (state.library.length === 0) return;
-  
-  while (state.queue.length < 3) {
-    logConsole('DJ Engine: Selecting next track...', 'info');
-    const nextTrack = await getNextDJTrack();
-    if (!nextTrack) break;
-    state.queue.push(nextTrack);
-    renderQueue();
+  while (state.queue.length < QUEUE_LOOKAHEAD) {
+    const next = await getNextDJTrack();
+    if (!next) break;
+    state.queue.push(next);
   }
+  renderQueue();
 }
 
 async function getNextDJTrack() {
-  const hasMoodMatchingTracks = state.library.some(t => doesTrackMatchMood(t, state.mood));
+  const mood = state.mood;
+  const currentTrack = state.currentTrack;
 
-  // Helper to filter candidates based on mood constraints
-  const getBaseCandidates = (checkMood) => {
-    return state.library.filter(track => {
-      // Never select tracks currently in queue or currently playing
+  // Pre-filter library to valid candidates for this mood to save time
+  const moodCandidates = state.library.filter(t => doesTrackMatchMood(t, mood));
+  const hasMoodMatches = moodCandidates.length > 0;
+
+  // Candidate evaluation tiers
+  const getCandidates = (requireExplicit = false, respectArtistCooldown = true, respectGenreCompatibility = true) => {
+    return (hasMoodMatches ? moodCandidates : state.library).filter(track => {
+      // 1. Basic unique checks
       if (state.queue.some(q => q.path === track.path)) return false;
-      if (state.currentTrack && state.currentTrack.path === track.path) return false;
-      if (checkMood && hasMoodMatchingTracks && !doesTrackMatchMood(track, state.mood)) return false;
+      if (currentTrack && currentTrack.path === track.path) return false;
+
+      // 2. DNA Logic
+      if (requireExplicit && !track.mood) return false;
+
+      // 3. Flow Logic
+      if (respectArtistCooldown && !isArtistAllowed(track.artist)) return false;
+      if (!isSongAllowed(track.path)) return false;
+
+      if (currentTrack && respectGenreCompatibility) {
+        if (!areGenresCompatible(currentTrack.genre, track.genre, currentTrack, track)) return false;
+      }
+
       return true;
     });
   };
 
   let candidates = [];
 
-  // Layer 1: Strict constraints (compatible genre, artist allowed, song allowed, mood matching)
-  candidates = getBaseCandidates(true).filter(track => {
-    if (state.currentTrack && !areGenresCompatible(state.currentTrack.genre, track.genre)) return false;
-    if (!isArtistAllowed(track.artist)) return false;
-    if (!isSongAllowed(track.path)) return false;
-    return true;
-  });
+  // Tier 1: Perfect DNA match (Analyzed, Cooldowns, Compatible)
+  candidates = getCandidates(true, true, true);
 
-  // Layer 2: Relax genre constraints (keep artist allowed, song allowed, mood matching)
-  if (candidates.length === 0) {
-    candidates = getBaseCandidates(true).filter(track => {
-      if (!isArtistAllowed(track.artist)) return false;
-      if (!isSongAllowed(track.path)) return false;
-      return true;
-    });
-  }
+  // Tier 2: Vibe match (Any, Cooldowns, Compatible)
+  if (candidates.length === 0) candidates = getCandidates(false, true, true);
 
-  // Layer 3: Relax artist constraints (keep song allowed, mood matching)
-  if (candidates.length === 0) {
-    candidates = getBaseCandidates(true).filter(track => {
-      if (!isSongAllowed(track.path)) return false;
-      return true;
-    });
-  }
+  // Tier 3: Relaxed compatibility (Any, Cooldowns, ignore Genre check)
+  if (candidates.length === 0) candidates = getCandidates(false, true, false);
 
-  // Layer 4: Relax song allowed (ignores song allowed, but keeps mood matching to prevent breaking vibes)
-  if (candidates.length === 0) {
-    candidates = getBaseCandidates(true);
-  }
+  // Tier 4: Relaxed cooldowns (Any, ignore Artist check, ignore Genre check)
+  if (candidates.length === 0) candidates = getCandidates(false, false, false);
 
-  // Layer 5: Fallback - if no tracks match the mood at all, relax mood check but respect repeat checks
-  if (candidates.length === 0 && hasMoodMatchingTracks) {
-    candidates = getBaseCandidates(false).filter(track => {
-      if (!isSongAllowed(track.path)) return false;
-      return true;
-    });
-  }
+  // Tier 5: Respect mood + song cooldown, drop all other filters
+  if (candidates.length === 0) candidates = (hasMoodMatches ? moodCandidates : state.library).filter(t =>
+    !state.queue.some(q => q.path === t.path) && isSongAllowed(t.path)
+  );
 
-  // Layer 6: Absolute fallback (ignore mood, ignore song allowed, but keep queue/current track excluded)
-  if (candidates.length === 0) {
-    candidates = getBaseCandidates(false);
-  }
+  // Tier 6: Respect mood, drop all cooldowns
+  if (candidates.length === 0) candidates = (hasMoodMatches ? moodCandidates : state.library).filter(t =>
+    !state.queue.some(q => q.path === t.path)
+  );
+
+  // Tier 7: Drop mood but keep genre compatibility — prevents jarring style jumps (e.g. Bob Bennett next to Beanbag)
+  if (candidates.length === 0) candidates = state.library.filter(t =>
+    !state.queue.some(q => q.path === t.path) &&
+    isSongAllowed(t.path) &&
+    areGenresCompatible(currentTrack?.genre, t.genre, currentTrack, t)
+  );
+
+  // Tier 8: Genre compatible, drop cooldowns too
+  if (candidates.length === 0) candidates = state.library.filter(t =>
+    !state.queue.some(q => q.path === t.path) &&
+    areGenresCompatible(currentTrack?.genre, t.genre, currentTrack, t)
+  );
+
+  // Tier 9: Absolute last resort — ignore everything, just avoid the queue
+  if (candidates.length === 0) candidates = state.library.filter(t => !state.queue.some(q => q.path === t.path));
 
   if (candidates.length === 0) return null;
 
-  const currentBpm = state.currentTrack?.bpm || 100;
-  const currentGenre = state.currentTrack?.genre || 'unknown';
-  const currentKey = state.currentTrack?.key || 'C Maj';
+  // Score and pick
+  const currentBpm = currentTrack?.bpm || 100;
+  const currentGenre = currentTrack?.genre || 'unknown';
+  const currentKey = currentTrack?.key || 'C Maj';
 
-  // Track selection is handled by the heuristic rule engine below.
-  // (The previous LLM "DJ" selection step was removed when Gemma was replaced
-  //  by Essentia.js — Essentia does audio analysis, not track-choice reasoning.)
+  const scoredCandidates = candidates.map(c => ({
+    track: c,
+    score: getHeuristicScore(c, currentBpm, currentGenre, currentKey)
+  }));
 
-  // Heuristic Rule Engine
-  const scoredCandidates = candidates.map(c => {
-    const noise = Math.random() * 30;
-    return {
-      track: c,
-      score: getHeuristicScore(c, currentBpm, currentGenre, currentKey) + noise
-    };
-  });
-
-  scoredCandidates.sort((a, b) => b.score - a.score);
-  
-  const poolSize = Math.min(5, scoredCandidates.length);
-  const candidatePool = scoredCandidates.slice(0, poolSize);
-  const chosenIndex = Math.floor(Math.random() * candidatePool.length);
-  const best = candidatePool[chosenIndex].track;
+  const best = weightedRandomPick(scoredCandidates);
+  if (!best) return null;
 
   let reason = `Transitioning into a smooth ${best.genre} vibe with "${best.title}" by ${best.artist}.`;
-  if (state.currentTrack) {
+  if (currentTrack) {
     const bpmDiff = Math.abs((best.bpm || 100) - currentBpm);
-    if (bpmDiff < 10) {
-      reason = `Matching the tempo at ${best.bpm} BPM, here is "${best.title}" by ${best.artist}.`;
-    } else if (best.key === currentKey) {
-      reason = `Keeping the harmonic key of ${best.key} going with "${best.title}".`;
-    }
+    if (bpmDiff < 10) reason = `Matching the tempo at ${best.bpm} BPM, here is "${best.title}" by ${best.artist}.`;
+    else if (best.key === currentKey) reason = `Keeping the harmonic key of ${best.key} going with "${best.title}".`;
   }
 
-  logConsole(`Heuristic DJ selected: "${best.title}" by ${best.artist} (Score: ${candidatePool[chosenIndex].score.toFixed(1)})`, 'system');
-  return {
-    path: best.path,
-    reason: reason
-  };
+  logConsole(`DJ selected: "${best.title}" by ${best.artist} (DNA: ${getSonicProfile(best)})`, 'system');
+  return { path: best.path, reason };
 }
 
 function getHeuristicScore(track, currentBpm, currentGenre, currentKey) {
@@ -1139,40 +1493,37 @@ function getHeuristicScore(track, currentBpm, currentGenre, currentKey) {
     });
     score += matches * 100;
   } else {
+    // Stricter checking for the active mood
+    const isMoodMatch = doesTrackMatchMood(track, state.mood);
+    if (isMoodMatch) {
+      score += 500; // Massive boost for actual matches
+    } else {
+      score -= 1000; // Heavy penalty for tracks that don't pass the guardrails
+    }
+
     if (track.mood && track.mood.toLowerCase() === state.mood.toLowerCase()) {
       score += 200;
     } else if (track.mood) {
       const tMood = track.mood.toLowerCase();
-      if (state.mood === 'energy' && (tMood.includes('energetic') || tMood.includes('upbeat') || tMood.includes('fast') || tMood.includes('intense') || tMood.includes('heavy'))) {
+      // Expanded mood cross-compatibility for scoring
+      if (state.mood === 'energy' && (tMood.includes('intense') || tMood.includes('heavy') || tMood.includes('aggressive') || tMood.includes('fast') || tMood.includes('driving'))) {
         score += 150;
-      } else if (state.mood === 'chill' && (tMood.includes('mellow') || tMood.includes('relax') || tMood.includes('ambient') || tMood.includes('calm') || tMood.includes('soft') || tMood.includes('quiet'))) {
+      } else if (state.mood === 'chill' && (tMood.includes('mellow') || tMood.includes('relax') || tMood.includes('ambient') || tMood.includes('calm') || tMood.includes('soft') || tMood.includes('quiet') || tMood.includes('peaceful'))) {
         score += 150;
-      } else if (state.mood === 'focus' && (tMood.includes('study') || tMood.includes('concentration') || tMood.includes('steady') || tMood.includes('instrumental') || tMood.includes('calm') || tMood.includes('ambient'))) {
+      } else if (state.mood === 'focus' && (tMood.includes('study') || tMood.includes('concentration') || tMood.includes('steady') || tMood.includes('instrumental') || tMood.includes('minimal'))) {
         score += 150;
-      } else if (state.mood === 'party' && (tMood.includes('dance') || tMood.includes('groove') || tMood.includes('funky') || tMood.includes('upbeat') || tMood.includes('house'))) {
+      } else if (state.mood === 'party' && (tMood.includes('dance') || tMood.includes('groove') || tMood.includes('funky') || tMood.includes('upbeat') || tMood.includes('club'))) {
         score += 150;
       }
-    }
-
-    const profile = moodProfiles[state.mood];
-    if (profile) {
-      const trackGenre = track.genre.toLowerCase();
-      const genreMatch = profile.targetGenres.some(tg => trackGenre.includes(tg));
-      if (genreMatch) score += 50;
     }
   }
 
   // 2. Transitions, BPM, and Key (Secondary Factors)
-  const profile = state.mood !== 'custom' ? moodProfiles[state.mood] : null;
-  if (profile && track.bpm && track.bpm >= profile.bpmRange[0] && track.bpm <= profile.bpmRange[1]) {
-    score += 20;
-  }
-
   if (state.currentTrack) {
-    if (areGenresCompatible(currentGenre, track.genre)) {
+    if (areGenresCompatible(currentGenre, track.genre, state.currentTrack, track)) {
       score += 10;
     } else {
-      score -= 100;
+      score -= 250; // Heavily penalize incompatible genre transitions
     }
 
     if (track.bpm) {
@@ -1184,6 +1535,27 @@ function getHeuristicScore(track, currentBpm, currentGenre, currentKey) {
 
     if (track.key && track.key === currentKey) {
       score += 10;
+    }
+
+    // 3. Emotional / Valence Continuity (prevent Happy to Sad jumps)
+    // Major to Major or Minor to Minor is preferred.
+    const currentIsMinor = currentKey.toLowerCase().includes('min');
+    const nextIsMinor = (track.key || '').toLowerCase().includes('min');
+    if (currentIsMinor === nextIsMinor) {
+      score += 30; // Bonus for staying in the same emotional lane
+    } else {
+      score -= 50; // Penalty for jarring emotional shifts
+    }
+
+    // 4. Dynamic Contrast Guardrail (prevent Energy to Sparse jumps)
+    // If outgoing track was loud/energetic, avoid tracks known to have quiet intros.
+    const currentLoudness = state.currentTrack?.loudness || 0.15;
+    const isNextPianoLed = (track.title || '').toLowerCase().includes('piano') ||
+                           (track.genre || '').toLowerCase().includes('ballad') ||
+                           ['barlowgirl', 'leigh nash', 'lenny leblanc'].some(a => (track.artist || '').toLowerCase().includes(a));
+
+    if (currentLoudness > 0.18 && isNextPianoLed) {
+      score -= 100; // Strong penalty for dropping from high energy into a thin piano intro
     }
   }
 
@@ -1219,6 +1591,49 @@ function getHeuristicScore(track, currentBpm, currentGenre, currentKey) {
   return score;
 }
 
+function getHeuristicMetadata(track) {
+  const profileKey = getSonicProfile(track);
+  const profile = SONIC_PROFILES[profileKey];
+
+  let bpm = 110;
+  let mood = profile.allowedMoods[0];
+
+  switch(profileKey) {
+    case 'INTIMATE': bpm = 75; break;
+    case 'STEADY_CCM': bpm = 95; break;
+    case 'CLASSIC_POP': bpm = 118; break;
+    case 'DRIVING_ALT': bpm = 125; break;
+    case 'HEAVY_ROCK': bpm = 135; break;
+    case 'BUSY_INDUSTRIAL': bpm = 140; break;
+    case 'BIG_BEAT': bpm = 132; break;
+    case 'DANCE_FLOOR': bpm = 128; break;
+    case 'TRADITIONAL': bpm = 145; break;
+  }
+
+  const keys = ['C Maj', 'A Min', 'G Maj', 'E Min', 'D Maj', 'B Min', 'A Maj', 'F# Min', 'F Maj', 'D Min', 'Bb Maj', 'G Min'];
+  const charCodeSum = track.title.split('').reduce((sum, ch) => sum + ch.charCodeAt(0), 0);
+  const key = keys[charCodeSum % keys.length];
+
+  return { bpm, key, mood };
+}
+
+function areGenresCompatible(genre1, genre2, track1, track2) {
+  // If we don't have track objects, we can't check profiles, so allow it as a fallback
+  if (!track1 || !track2) return true;
+
+  const profile1 = getSonicProfile(track1);
+  const profile2 = getSonicProfile(track2);
+
+  // Rule: The two profiles must be explicitly compatible (adjacent tiers)
+  const isCompatible = SONIC_PROFILES[profile1].compatibility.includes(profile2);
+
+  if (!isCompatible) {
+    console.log(`[DJ Logic] Blocked jump from ${profile1} to ${profile2}`);
+  }
+
+  return isCompatible;
+}
+
 // --- Tabs navigation setup ---
 function setUpTabs() {
   const tabDashboard = document.getElementById('tab-dashboard');
@@ -1242,6 +1657,39 @@ function setUpTabs() {
       renderLibraryTable();
     });
   }
+}
+
+function setUpMoodSelector() {
+  moodsContainer.querySelectorAll('.mood-card').forEach(card => {
+    card.addEventListener('click', () => {
+      moodsContainer.querySelectorAll('.mood-card').forEach(c => c.classList.remove('active'));
+      card.classList.add('active');
+      state.mood = card.dataset.mood;
+
+      if (state.mood === 'custom') {
+        customMoodContainer.classList.remove('hidden');
+      } else {
+        customMoodContainer.classList.add('hidden');
+        state.customMoodPrompt = '';
+        logConsole(`Mood changed to: ${state.mood}`, 'info');
+        state.queue = [];
+        fillQueue();
+      }
+    });
+  });
+
+  btnApplyCustomMood.addEventListener('click', () => {
+    const prompt = customMoodInput.value.trim();
+    if (!prompt) return;
+    state.customMoodPrompt = prompt;
+    logConsole(`Custom mood applied: "${prompt}"`, 'info');
+    state.queue = [];
+    fillQueue();
+  });
+
+  customMoodInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') btnApplyCustomMood.click();
+  });
 }
 
 // --- Player controls setup ---
@@ -1319,7 +1767,55 @@ function setUpAudioPlayerControls() {
     if (!state.currentTrack || state.isCrossfading) return;
     const seekTime = (e.target.value / 100) * state.duration;
     sendAudioCommand('seek', { time: seekTime });
-    state.isDraggingSlider = false;
+
+    // Safety fallback: if for some reason the 'seeked' event doesn't
+    // arrive, we reset the dragging flag after 1 second anyway.
+    setTimeout(() => {
+      state.isDraggingSlider = false;
+    }, 1000);
+  });
+
+  const endDragSafety = () => {
+    // If the user clicked but didn't move (no 'change' event),
+    // ensure we resume slider updates.
+    if (state.isDraggingSlider) {
+      setTimeout(() => {
+        state.isDraggingSlider = false;
+      }, 200);
+    }
+  };
+
+  progressSlider.addEventListener('mouseup', endDragSafety);
+  progressSlider.addEventListener('touchend', endDragSafety);
+}
+
+function renderQueue() {
+  if (state.queue.length === 0) {
+    comingUpList.innerHTML = '<div class="empty-queue-text">No tracks queued. Add music and hit Play.</div>';
+    return;
+  }
+  comingUpList.innerHTML = state.queue.map((item, idx) => {
+    const track = state.library.find(t => t.path === item.path);
+    if (!track) return '';
+    return `<div class="queue-item" data-index="${idx}">
+      <div class="queue-info">
+        <div class="queue-title">${escapeHtml(track.title || '—')}</div>
+        <div class="queue-artist">${escapeHtml(track.artist || '—')}</div>
+        ${item.reason ? `<div class="queue-reason">${escapeHtml(item.reason)}</div>` : ''}
+      </div>
+      <button class="btn-icon queue-remove-btn" title="Remove">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M18 6 6 18M6 6l12 12"></path>
+        </svg>
+      </button>
+    </div>`;
+  }).join('');
+
+  comingUpList.querySelectorAll('.queue-remove-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      removeFromQueue(parseInt(btn.closest('[data-index]').dataset.index));
+    });
   });
 }
 
@@ -1333,19 +1829,28 @@ function updateVolumeIcon(vol) {
   }
 }
 
+let isTransitioning = false;
+
 async function playTrack(track) {
-  if (!track) return;
-  state.currentTrack = track;
-  state.isCrossfading = false;
+  if (!track || isTransitioning) return;
+  isTransitioning = true;
   
-  // Instruct audio process to play
-  sendAudioCommand('play-track', { track });
-  updateNowPlayingUI();
-  
-  await fillQueue();
+  try {
+    state.currentTrack = track;
+    state.isCrossfading = false;
+
+    // Instruct audio process to play
+    sendAudioCommand('play-track', { track });
+    updateNowPlayingUI();
+
+    await fillQueue();
+  } finally {
+    isTransitioning = false;
+  }
 }
 
 async function playNextFromQueue() {
+  if (isTransitioning) return;
   await fillQueue();
   if (state.queue.length > 0) {
     const nextItem = state.queue.shift();
@@ -1356,17 +1861,56 @@ async function playNextFromQueue() {
 }
 
 async function skipTrack() {
-  await fillQueue();
-  if (state.queue.length > 0) {
-    const nextItem = state.queue.shift();
-    const track = state.library.find(t => t.path === nextItem.path);
-    renderQueue();
-    
-    if (state.currentTrack && state.isPlaying) {
-      sendAudioCommand('start-crossfade', { nextTrack: track });
-    } else {
-      await playTrack(track);
+  if (isTransitioning) return;
+  isTransitioning = true;
+
+  try {
+    await fillQueue();
+    if (state.queue.length > 0) {
+      const nextItem = state.queue.shift();
+      const track = state.library.find(t => t.path === nextItem.path);
+      renderQueue();
+
+      if (state.currentTrack) {
+        sendAudioCommand('start-crossfade', { nextTrack: track });
+      } else {
+        await playTrack(track);
+      }
     }
+  } finally {
+    // Release the lock after a short delay to prevent accidental double-clicks
+    setTimeout(() => {
+      isTransitioning = false;
+    }, 500);
+  }
+}
+
+async function playNextTrackFromQueue() {
+  // If we are already handling a transition (manual or auto), ignore this request
+  if (isTransitioning) return;
+  isTransitioning = true;
+
+  try {
+    if (state.queue.length > 0) {
+      const nextItem = state.queue.shift();
+      const track = state.library.find(t => t.path === nextItem.path);
+      renderQueue();
+      sendAudioCommand('start-crossfade', { nextTrack: track });
+    }
+  } finally {
+    setTimeout(() => {
+      isTransitioning = false;
+    }, 500);
+  }
+}
+
+async function removeFromQueue(index) {
+  if (index >= 0 && index < state.queue.length) {
+    const removed = state.queue.splice(index, 1)[0];
+    const track = state.library.find(t => t.path === removed.path);
+    logConsole(`Removed from queue: "${track ? track.title : 'Unknown'}"`, 'info');
+    renderQueue();
+    await fillQueue(); // Maintain lookahead buffer
   }
 }
 
@@ -1375,17 +1919,21 @@ function updateNowPlayingUI() {
   trackTitle.innerText = state.currentTrack.title;
   trackArtist.innerText = state.currentTrack.artist;
   trackAlbum.innerText = state.currentTrack.album || 'Unknown Album';
-  
+
   genreBadge.innerText = state.currentTrack.genre;
   bpmBadge.innerText = state.currentTrack.bpm ? `${state.currentTrack.bpm} BPM` : '-- BPM';
   keyBadge.innerText = state.currentTrack.key || 'Key';
   moodBadge.innerText = state.currentTrack.mood ? state.currentTrack.mood.charAt(0).toUpperCase() + state.currentTrack.mood.slice(1) : 'Unknown Mood';
   trackDurationTotal.innerText = formatDuration(state.currentTrack.duration);
 
-  if (state.currentTrack.albumArt) {
+  if (state.currentTrack.albumArt && (state.currentTrack.albumArt.startsWith('http') || state.currentTrack.albumArt.length > 500)) {
+    // If it's an external URL (MusicBrainz) or a long data URL, use it directly.
     albumArt.src = state.currentTrack.albumArt;
   } else {
-    albumArt.src = GENERIC_LABEL_SVG;
+    // Pull from the file itself via the high-performance art protocol
+    // Using triple-slash, encoding, and a timestamp to force refresh on track change
+    const artUrl = `app-media:///art/${encodeURIComponent(state.currentTrack.path)}?v=${Date.now()}`;
+    albumArt.src = artUrl;
   }
 
   const rows = libraryTableBody.querySelectorAll('tr');
@@ -1459,7 +2007,7 @@ async function enrichMetadata(artist, title) {
     
     const response = await fetch(url, {
       headers: {
-        'User-Agent': 'YourOwnPersonalDJ/1.0.0 ( techn.personal.dj@gmail.com )'
+        'User-Agent': 'YourOwnPersonalDJ/1.0.0 ( werisetech@gmail.com )'
       }
     });
 
@@ -1524,18 +2072,29 @@ async function enrichMetadata(artist, title) {
       if (!state.currentTrack.albumArt && releases.length > 0 && releases[0].id) {
         const releaseId = releases[0].id;
         const caaUrl = `https://coverartarchive.org/release/${releaseId}/front-250`;
-        
-        state.currentTrack.albumArt = caaUrl;
-        albumArt.src = caaUrl;
-        
-        // Save updated track to database cache
-        await dbSaveTrack(state.currentTrack);
-        
-        // Update in memory library
-        const libTrack = state.library.find(t => t.path === state.currentTrack.path);
-        if (libTrack) {
-          libTrack.albumArt = caaUrl;
-          renderLibraryTable();
+
+        try {
+          const imgResp = await fetch(caaUrl);
+          if (imgResp.ok) {
+            const blob = await imgResp.blob();
+            const dataUrl = await new Promise(resolve => {
+              const reader = new FileReader();
+              reader.onloadend = () => resolve(reader.result);
+              reader.readAsDataURL(blob);
+            });
+            if (dataUrl && dataUrl.length > 500) {
+              state.currentTrack.albumArt = dataUrl;
+              albumArt.src = dataUrl;
+
+              const libTrack = state.library.find(t => t.path === state.currentTrack.path);
+              if (libTrack) libTrack.albumArt = dataUrl;
+
+              await dbSaveTrack(state.currentTrack);
+              renderLibraryTable();
+            }
+          }
+        } catch (err) {
+          console.warn('Cover art fetch failed in enrichMetadata:', err);
         }
       }
     }
@@ -1549,234 +2108,6 @@ async function enrichMetadata(artist, title) {
   }
 }
 
-toggleEnrichment.addEventListener('change', (e) => {
-  state.isEnrichmentEnabled = e.target.checked;
-  if (!state.isEnrichmentEnabled) {
-    enrichmentContent.innerHTML = `
-      <div class="enrichment-placeholder">
-        <p>Internet Metadata is disabled.</p>
-      </div>
-    `;
-  } else if (state.currentTrack) {
-    enrichMetadata(state.currentTrack.artist, state.currentTrack.title);
-  }
-});
-
-// --- Mood Selection Cards ---
-moodsContainer.addEventListener('click', async (e) => {
-  const card = e.target.closest('.mood-card');
-  if (!card) return;
-
-  moodsContainer.querySelectorAll('.mood-card').forEach(c => c.classList.remove('active'));
-  card.classList.add('active');
-
-  const selectedMood = card.dataset.mood;
-  state.mood = selectedMood;
-
-  if (selectedMood === 'custom') {
-    customMoodContainer.classList.remove('hidden');
-    customMoodInput.focus();
-  } else {
-    customMoodContainer.classList.add('hidden');
-    state.customMoodPrompt = '';
-    
-    logConsole(`Mood changed to: ${selectedMood.toUpperCase()}`, 'info');
-    
-    state.queue = [];
-    renderQueue();
-    await fillQueue();
-    
-    if (state.isPlaying && state.currentTrack) {
-      logConsole(`DJ Vibe Shift: Crossfading into ${selectedMood.toUpperCase()} mood track immediately...`, 'info');
-      skipTrack();
-    }
-  }
-});
-
-btnApplyCustomMood.addEventListener('click', () => {
-  applyCustomMood();
-});
-
-customMoodInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    applyCustomMood();
-  }
-});
-
-async function applyCustomMood() {
-  const prompt = customMoodInput.value.trim();
-  if (!prompt) return;
-
-  state.customMoodPrompt = prompt;
-  logConsole(`Custom Mood Prompt applied: "${prompt}"`, 'info');
-
-  state.queue = [];
-  renderQueue();
-  await fillQueue();
-  
-  if (state.isPlaying && state.currentTrack) {
-    logConsole(`DJ Vibe Shift: Crossfading into custom mood ("${prompt}") immediately...`, 'info');
-    skipTrack();
-  }
-}
-
-// --- Library Views & Search Rendering ---
-function renderLibraryTable() {
-  const query = librarySearch.value.trim().toLowerCase();
-  
-  const filtered = state.library.filter(track => {
-    if (!track) return false;
-    if (!query) return true;
-    const title = (track.title || '').toLowerCase();
-    const artist = (track.artist || '').toLowerCase();
-    const album = (track.album || '').toLowerCase();
-    const genre = (track.genre || '').toLowerCase();
-    return (
-      title.includes(query) ||
-      artist.includes(query) ||
-      album.includes(query) ||
-      genre.includes(query)
-    );
-  });
-
-  libraryTableBody.innerHTML = '';
-  
-  if (filtered.length === 0) {
-    libraryTableBody.innerHTML = `
-      <tr>
-        <td colspan="9" class="text-center">No matching tracks found.</td>
-      </tr>
-    `;
-    return;
-  }
-
-  filtered.forEach(track => {
-    const tr = document.createElement('tr');
-    tr.dataset.path = track.path;
-    
-    if (state.currentTrack && state.currentTrack.path === track.path) {
-      tr.className = 'playing';
-    }
-
-    const cleanTitle = escapeHtml(track.title);
-    const cleanArtist = escapeHtml(track.artist);
-    const cleanAlbum = escapeHtml(track.album || '');
-    const cleanGenre = escapeHtml(track.genre);
-    const cleanFormat = escapeHtml(track.format);
-    const cleanMood = track.mood ? escapeHtml(track.mood) : '<span style="color:var(--text-dark);">--</span>';
-
-    tr.innerHTML = `
-      <td title="${cleanTitle}">${cleanTitle}</td>
-      <td title="${cleanArtist}">${cleanArtist}</td>
-      <td title="${cleanAlbum}">${cleanAlbum}</td>
-      <td>${cleanGenre}</td>
-      <td class="text-center">${track.bpm ? track.bpm : '<span style="color:var(--text-dark);">--</span>'}</td>
-      <td class="text-center">${track.key ? escapeHtml(track.key) : '<span style="color:var(--text-dark);">--</span>'}</td>
-      <td class="text-center" style="text-transform: capitalize;">${cleanMood}</td>
-      <td>${formatDuration(track.duration)}</td>
-      <td style="text-transform: uppercase;">${cleanFormat}</td>
-    `;
-
-    tr.addEventListener('dblclick', () => {
-      state.queue = [];
-      renderQueue();
-      playTrack(track);
-    });
-
-    libraryTableBody.appendChild(tr);
-  });
-}
-
-librarySearch.addEventListener('input', () => {
-  renderLibraryTable();
-});
-
-function renderQueue() {
-  comingUpList.innerHTML = '';
-  
-  if (state.queue.length === 0) {
-    comingUpList.innerHTML = `<div class="empty-queue-text">No tracks queued. Add music and hit Play.</div>`;
-    return;
-  }
-
-  state.queue.forEach((item, idx) => {
-    const track = state.library.find(t => t.path === item.path);
-    if (!track) return;
-
-    const div = document.createElement('div');
-    div.className = 'queue-item';
-    
-    const art = document.createElement('img');
-    art.className = 'queue-art';
-    art.onerror = () => {
-      if (!art.src.startsWith('data:image/svg+xml')) {
-        art.src = GENERIC_LABEL_SVG;
-      }
-    };
-    if (track.albumArt) {
-      art.src = track.albumArt;
-    } else {
-      art.src = GENERIC_LABEL_SVG;
-    }
-
-    const info = document.createElement('div');
-    info.className = 'queue-info';
-    
-    const title = document.createElement('div');
-    title.className = 'queue-title';
-    title.innerText = track.title;
-    
-    const artist = document.createElement('div');
-    artist.className = 'queue-artist';
-    artist.innerText = track.artist;
-
-    info.appendChild(title);
-    info.appendChild(artist);
-
-    const meta = document.createElement('div');
-    meta.className = 'queue-meta';
-    
-    const bpm = document.createElement('span');
-    bpm.className = 'queue-bpm';
-    bpm.innerText = track.bpm ? `${track.bpm} BPM` : '-- BPM';
-
-    const reason = document.createElement('span');
-    reason.className = 'queue-reason';
-    reason.innerText = item.reason || '';
-    reason.title = item.reason || '';
-
-    meta.appendChild(bpm);
-    meta.appendChild(reason);
-
-    div.appendChild(art);
-    div.appendChild(info);
-    div.appendChild(meta);
-    
-    comingUpList.appendChild(div);
-  });
-}
-
-function updateAIStatusUI() {
-  aiStatusBadge.className = `ai-status-badge ${state.ollamaStatus}`;
-  
-  if (state.ollamaStatus === 'connected') {
-    aiStatusText.innerText = 'Active';
-    aiModelName.innerText = state.ollamaModel;
-  } else if (state.ollamaStatus === 'checking') {
-    aiStatusText.innerText = 'Loading...';
-    aiModelName.innerText = 'Initializing Essentia...';
-  } else if (state.ollamaStatus === 'fallback') {
-    aiStatusText.innerText = 'Heuristics';
-    aiModelName.innerText = 'Rule-based Heuristics';
-  } else {
-    aiStatusText.innerText = 'Offline';
-    aiModelName.innerText = 'Local Heuristics';
-  }
-}
-
-// Helper to strip ID3v2 tags from ArrayBuffer before decoding.
-// This prevents Chrome's Web Audio API from failing with "Unable to decode audio data"
-// on files containing large metadata (like embedded cover art).
 function stripId3v2(arrayBuffer) {
   const uint8 = new Uint8Array(arrayBuffer);
   // Check if it starts with "ID3" (hex: 49 44 33)
@@ -1804,6 +2135,119 @@ function stripId3v2(arrayBuffer) {
   return arrayBuffer;
 }
 
+function normalizePath(filePath) {
+  if (!filePath) return '';
+  let normalized = filePath.replace(/\//g, '\\');
+  if (normalized.length >= 2 && normalized[1] === ':') {
+    normalized = normalized[0].toUpperCase() + normalized.slice(1);
+  }
+  return normalized;
+}
+
+// Repair corrupted metadata values that may have been stored in IndexedDB by
+// earlier versions of the app (before scan-time sanitization was added).
+function sanitizeLibraryTrack(track) {
+  // BPM: must be a whole number in a realistic musical range
+  if (track.bpm !== null && track.bpm !== undefined) {
+    const n = parseInt(track.bpm, 10);
+    track.bpm = (!isNaN(n) && n >= 20 && n <= 300) ? n : null;
+  }
+
+  // Key: normalise to "Note Maj/Min" — mirrors the main-process normalizeKey logic
+  if (track.key) {
+    let s = String(track.key).trim().replace(/\/.*$/, '').trim();
+    let m;
+    m = s.match(/^([A-G][#b]?)\s+(Maj|Min)$/i);
+    if (m) { track.key = `${m[1]} ${m[2][0].toUpperCase() + m[2].slice(1).toLowerCase()}`; }
+    else if ((m = s.match(/^([A-G][#b]?)\s+(major|minor)$/i))) {
+      track.key = `${m[1]} ${m[2].toLowerCase() === 'minor' ? 'Min' : 'Maj'}`;
+    } else if ((m = s.match(/^([A-G][#b]?)m$/i))) {
+      track.key = `${m[1]} Min`;
+    } else if ((m = s.match(/^([A-G][#b]?)$/i))) {
+      track.key = `${m[1]} Maj`;
+    } else {
+      track.key = null; // unrecognised — Essentia will re-analyse
+    }
+  }
+
+  // Text fields: strip null bytes and collapse blank values to sensible defaults
+  const textDefaults = { title: null, artist: 'Unknown Artist', album: 'Unknown Album', genre: 'Unknown' };
+  Object.keys(textDefaults).forEach(field => {
+    if (track[field] !== undefined) {
+      let cleaned = String(track[field] ?? '').replace(/\0/g, '').trim();
+
+      // Specific fix for mis-tagged "Podcast" genre (e.g. Sea Wolf)
+      if (field === 'genre' && (cleaned.toLowerCase() === 'podcast' || cleaned === '186')) {
+        if (track.artist && track.artist.toLowerCase().includes('sea wolf')) {
+          cleaned = 'Indie Rock';
+        } else {
+          cleaned = 'Unknown';
+        }
+      }
+
+      // Fix for "Carbine (Escape Mix)" - ensuring it's seen as Industrial/Electronic, not Metal
+      if (field === 'genre' && track.title && track.title.toLowerCase().includes('carbine')) {
+        cleaned = 'Industrial Electronic';
+      }
+
+      track[field] = cleaned || textDefaults[field] ||
+        (field === 'title' ? track.path.split('\\').pop().replace(/\.[^.]+$/, '') : '');
+    }
+  });
+
+  // Re-enable automatic protocol fetch for art by clearing broken base64 strings
+  if (track.albumArt && track.albumArt.startsWith('data:image/') && track.albumArt.length < 500) {
+    track.albumArt = null;
+  }
+
+  // albumArt: must be a data URL or an https URL — clear anything else
+  if (track.albumArt != null) {
+    const art = String(track.albumArt);
+    if (!art.startsWith('data:') && !art.startsWith('https://')) {
+      track.albumArt = null;
+    }
+  }
+
+  // ReplayGain: validate dB gain (−51 to +51) and linear peak (0 to 2)
+  if (track.replaygainTrackGain != null) {
+    const n = parseFloat(track.replaygainTrackGain);
+    track.replaygainTrackGain = (!isNaN(n) && n > -51 && n < 51) ? parseFloat(n.toFixed(2)) : null;
+  }
+  if (track.replaygainTrackPeak != null) {
+    const n = parseFloat(track.replaygainTrackPeak);
+    track.replaygainTrackPeak = (!isNaN(n) && n > 0 && n <= 2) ? parseFloat(n.toFixed(6)) : null;
+  }
+
+  // loudness (RMS): must be a positive number, typically < 1
+  if (track.loudness != null) {
+    const n = parseFloat(track.loudness);
+    track.loudness = (!isNaN(n) && n > 0 && n <= 1) ? parseFloat(n.toFixed(4)) : null;
+  }
+
+  return track;
+}
+
+// Always create a fresh OfflineAudioContext per decode — reusing a single
+// context causes abort() crashes on some tracks (e.g. after a failed decode).
+function createFreshAudioCtx() {
+  return new (window.OfflineAudioContext || window.AudioContext)(1, 44100, 44100);
+}
+
+// Safe wrapper around decodeAudioData that falls back to the original buffer if the tag-stripped buffer fails.
+async function decodeAudioDataWithFallback(arrayBuffer) {
+  const ctx = createFreshAudioCtx(); // fresh every time
+  const backupBuffer = arrayBuffer.slice(0); // retain backup before first decode detaches the buffer
+
+  try {
+    const cleanBuffer = stripId3v2(arrayBuffer);
+    return await ctx.decodeAudioData(cleanBuffer);
+  } catch (stripErr) {
+    console.warn('Tag-stripped decode failed; falling back to original buffer...', stripErr);
+    const ctx2 = createFreshAudioCtx(); // fresh again — don't reuse a context that already errored
+    return await ctx2.decodeAudioData(backupBuffer);
+  }
+}
+
 // Decode an audio file to a mono Float32Array at 44100 Hz for Essentia analysis.
 // Decoding uses OfflineAudioContext (renderer-only); the resulting samples are
 // then transferred to the Essentia worker.
@@ -1813,11 +2257,7 @@ async function decodeTrackToMono(trackPath) {
   if (!response.ok) throw new Error(`Fetch failed with status ${response.status}`);
 
   const arrayBuffer = await response.arrayBuffer();
-  const cleanBuffer = stripId3v2(arrayBuffer);
-  
-  // Force 44100 Hz so Essentia's default-sample-rate algorithms stay accurate.
-  const ctx = new (window.OfflineAudioContext || window.AudioContext)(1, 44100, 44100);
-  const audioBuffer = await ctx.decodeAudioData(cleanBuffer);
+  const audioBuffer = await decodeAudioDataWithFallback(arrayBuffer);
 
   const sampleRate = audioBuffer.sampleRate;
   const channels = audioBuffer.numberOfChannels;
@@ -1845,10 +2285,7 @@ async function runTransientAnalysis(trackPath, knownBpm) {
   if (!response.ok) throw new Error(`Fetch failed with status ${response.status}`);
   
   const arrayBuffer = await response.arrayBuffer();
-  const cleanBuffer = stripId3v2(arrayBuffer);
-  
-  const ctx = new (window.OfflineAudioContext || window.AudioContext)(1, 44100, 44100);
-  const audioBuffer = await ctx.decodeAudioData(cleanBuffer);
+  const audioBuffer = await decodeAudioDataWithFallback(arrayBuffer);
   
   const sampleRate = audioBuffer.sampleRate;
   const channelData = audioBuffer.getChannelData(0);

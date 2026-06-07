@@ -639,12 +639,13 @@ button {
 }
 
 .album-art {
-  width: 72px;
-  height: 72px;
+  width: 86px;
+  height: 86px;
   border-radius: 50%;
   object-fit: cover;
-  border: 2px solid #000;
   z-index: 3;
+  box-shadow: 0 0 10px rgba(0,0,0,0.5);
+  background: #111; /* Fallback color */
 }
 
 .vinyl-center {
@@ -834,8 +835,8 @@ button {
   flex-direction: column;
   gap: 10px;
   overflow-y: auto;
-  flex-grow: 1;
-  max-height: none;
+  flex-grow: 0;
+  max-height: 210px;
   padding-right: 4px;
 }
 
@@ -863,11 +864,28 @@ button {
   border-color: rgba(255, 255, 255, 0.06);
 }
 
+.queue-remove-btn {
+  opacity: 0;
+  color: var(--text-dark);
+  transition: all 0.2s ease;
+  margin-left: 4px;
+}
+
+.queue-item:hover .queue-remove-btn {
+  opacity: 1;
+}
+
+.queue-remove-btn:hover {
+  color: var(--danger) !important;
+  background: rgba(239, 68, 68, 0.1) !important;
+}
+
 .queue-art {
   width: 36px;
   height: 36px;
-  border-radius: 6px;
+  border-radius: 50%;
   object-fit: cover;
+  border: 1px solid rgba(255,255,255,0.1);
 }
 
 .queue-info {
@@ -876,6 +894,7 @@ button {
 }
 
 .queue-title {
+  display: block;
   font-size: 0.85rem;
   font-weight: 600;
   color: white;
@@ -885,11 +904,13 @@ button {
 }
 
 .queue-artist {
+  display: block;
   font-size: 0.75rem;
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  margin-top: 2px;
 }
 
 .queue-meta {
@@ -919,7 +940,7 @@ button {
 
 /* Enrichment details */
 .enrichment-card {
-  max-height: 180px;
+  min-height: 0;
 }
 
 .toggle-switch {

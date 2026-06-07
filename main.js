@@ -74,11 +74,55 @@ function createWindow() {
 
 // Register custom protocol for local media streaming
 app.whenReady().then(() => {
-  protocol.handle('app-media', (request) => {
+  protocol.handle('app-media', async (request) => {
     try {
       const parsedUrl = new URL(request.url);
       let filePath = decodeURIComponent(parsedUrl.pathname);
       
+      // 1. Handle Album Art requests: app-media:///art/C%3A%5CMusic%5Csong.mp3
+      if (filePath.startsWith('/art/')) {
+        let cleanPath = filePath.slice(5); // Remove '/art/' prefix
+
+        // Handle encoded path (if any) and normalize
+        cleanPath = path.normalize(cleanPath);
+
+        // Fix for Windows drive letters (e.g. \C:\ -> C:\)
+        if (cleanPath.startsWith('\\') && cleanPath.charAt(2) === ':') {
+          cleanPath = cleanPath.slice(1);
+        }
+
+        if (!fs.existsSync(cleanPath)) {
+          console.error(`[Art Protocol] File not found: ${cleanPath}`);
+          return new Response('Not Found', { status: 404 });
+        }
+
+        try {
+          // parseFile is more reliable for different formats
+          const metadata = await musicMetadata.parseFile(cleanPath, { skipCovers: false });
+
+          if (metadata.common.picture && metadata.common.picture.length > 0) {
+            // Find the best quality picture
+            const pic = metadata.common.picture.find(p => p.type === 'Front Cover') || metadata.common.picture[0];
+
+            let mimeType = (pic.format || 'image/jpeg').toLowerCase();
+            if (!mimeType.includes('/')) mimeType = 'image/' + mimeType;
+            if (mimeType === 'image/jpg') mimeType = 'image/jpeg';
+
+            return new Response(pic.data, {
+              headers: {
+                'Content-Type': mimeType,
+                'Content-Length': pic.data.length.toString(),
+                'Cache-Control': 'public, max-age=86400'
+              }
+            });
+          }
+        } catch (err) {
+          console.error(`[Art Protocol] Metadata error for ${cleanPath}:`, err);
+        }
+        return new Response('No Art Found', { status: 404 });
+      }
+
+      // 2. Handle Audio File requests: app-media://c/Music/song.mp3 or app-media:///C:/Music/song.mp3
       // Extract drive letter if parsed as host (e.g. app-media://c:/Users/...)
       let drive = parsedUrl.host || '';
       if (drive.endsWith(':')) {
@@ -230,6 +274,18 @@ ipcMain.on('open-external', (event, urlToOpen) => {
   }
 });
 
+function normalizePath(filePath) {
+  if (!filePath) return '';
+  let normalized = path.normalize(filePath);
+  if (process.platform === 'win32') {
+    normalized = normalized.replace(/\//g, '\\');
+    if (normalized.length >= 2 && normalized[1] === ':') {
+      normalized = normalized[0].toUpperCase() + normalized.slice(1);
+    }
+  }
+  return normalized;
+}
+
 // Native Directory Picker
 ipcMain.handle('select-folder', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
@@ -238,14 +294,14 @@ ipcMain.handle('select-folder', async () => {
   if (result.canceled) {
     return null;
   } else {
-    return result.filePaths[0];
+    return normalizePath(result.filePaths[0]);
   }
 });
 
 // Default Music Folder
 ipcMain.handle('get-system-music-folder', () => {
   try {
-    return app.getPath('music');
+    return normalizePath(app.getPath('music'));
   } catch (err) {
     console.error('Error getting system music path:', err);
     return null;
@@ -263,7 +319,7 @@ async function getAudioFiles(dirPath, filesList = []) {
       } else {
         const ext = path.extname(file.name).toLowerCase();
         if (['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.wma'].includes(ext)) {
-          filesList.push(resPath);
+          filesList.push(normalizePath(resPath));
         }
       }
     }
@@ -271,6 +327,95 @@ async function getAudioFiles(dirPath, filesList = []) {
     console.error(`Error reading directory ${dirPath}:`, err);
   }
   return filesList;
+}
+
+// --- Metadata sanitization helpers ---
+
+// Strip null bytes and trim; return fallback for blank/missing values.
+function sanitizeText(val, fallback = '') {
+  if (val === null || val === undefined) return fallback;
+  const cleaned = String(val).replace(/\0/g, '').trim();
+  return cleaned || fallback;
+}
+
+// Accept any common BPM representation and return a plain integer, or null.
+// Handles "128 BPM", "~128", "128.7", "0", out-of-range values, NaN, etc.
+function normalizeBpm(val) {
+  if (val === null || val === undefined) return null;
+  const parsed = parseInt(String(val).replace(/[^0-9]/g, ''), 10);
+  if (isNaN(parsed) || parsed < 20 || parsed > 300) return null;
+  return parsed;
+}
+
+// Normalise the many key formats music apps write into the consistent
+// "Note Maj/Min" form this app uses (e.g. "Am" → "A Min",
+// "C# major" → "C# Maj", "Bb" → "Bb Maj", "Am/C" → "A Min").
+// Returns null for unrecognised formats — Essentia analysis fills those in.
+function normalizeKey(val) {
+  if (!val) return null;
+  let s = String(val).trim().replace(/\/.*$/, '').trim(); // strip slash-chord bass note
+
+  let m;
+  // Already in app format: "A Maj" / "A Min"
+  m = s.match(/^([A-G][#b]?)\s+(Maj|Min)$/i);
+  if (m) return `${m[1]} ${m[2][0].toUpperCase() + m[2].slice(1).toLowerCase()}`;
+
+  // Long form: "A major" / "Bb minor"
+  m = s.match(/^([A-G][#b]?)\s+(major|minor)$/i);
+  if (m) return `${m[1]} ${m[2].toLowerCase() === 'minor' ? 'Min' : 'Maj'}`;
+
+  // Short minor: "Am", "C#m", "Bbm"
+  m = s.match(/^([A-G][#b]?)m$/i);
+  if (m) return `${m[1]} Min`;
+
+  // Bare note — assume major: "A", "C#", "Bb"
+  m = s.match(/^([A-G][#b]?)$/i);
+  if (m) return `${m[1]} Maj`;
+
+  return null; // unrecognised — let Essentia determine it
+}
+
+// --- ReplayGain helpers ---
+
+// Search native tag blocks for a ReplayGain entry. Handles ID3v2 TXXX frames
+// (MP3) and plain key=value tags (FLAC/Vorbis, APEv2, etc.).
+function findReplaygainNativeTag(metadata, descKey) {
+  const upper = descKey.toUpperCase();
+  for (const nativeType of Object.keys(metadata.native || {})) {
+    const tags = metadata.native[nativeType];
+    if (!Array.isArray(tags)) continue;
+    for (const tag of tags) {
+      // ID3v2 TXXX: { id: 'TXXX', value: { description: '...', text: '...' } }
+      if (tag.id === 'TXXX' && tag.value &&
+          String(tag.value.description || '').toUpperCase() === upper) {
+        return tag.value.text ?? tag.value.value ?? null;
+      }
+      // Vorbis / APEv2 / generic: { id: 'REPLAYGAIN_TRACK_GAIN', value: '-3.24 dB' }
+      if (String(tag.id || '').toUpperCase() === upper) {
+        return tag.value;
+      }
+    }
+  }
+  return null;
+}
+
+// Parse a ReplayGain dB string or number ("-3.24 dB", "+2.0", 3.24, …)
+// into a rounded float, rejecting clearly invalid values.
+function parseReplaygainDb(val) {
+  if (val === null || val === undefined) return null;
+  const m = String(val).match(/([+-]?\d+\.?\d*)/);
+  if (!m) return null;
+  const n = parseFloat(m[1]);
+  if (isNaN(n) || n < -51 || n > 51) return null;
+  return parseFloat(n.toFixed(2));
+}
+
+// Parse a ReplayGain peak value (linear amplitude, typically 0–1).
+function parseReplaygainPeak(val) {
+  if (val === null || val === undefined) return null;
+  const n = parseFloat(String(val));
+  if (isNaN(n) || n <= 0 || n > 2) return null;
+  return parseFloat(n.toFixed(6));
 }
 
 function findNativeTag(metadata, tagId) {
@@ -289,8 +434,9 @@ ipcMain.on('start-scan', async (event, folders) => {
   try {
     const allFiles = [];
     for (const folder of folders) {
-      if (fs.existsSync(folder)) {
-        await getAudioFiles(folder, allFiles);
+      const normFolder = normalizePath(folder);
+      if (fs.existsSync(normFolder)) {
+        await getAudioFiles(normFolder, allFiles);
       }
     }
 
@@ -303,43 +449,73 @@ ipcMain.on('start-scan', async (event, folders) => {
     }
 
     for (const filePath of allFiles) {
+      const normalizedFilePath = normalizePath(filePath);
       try {
-        const metadata = await musicMetadata.parseFile(filePath);
+        const metadata = await musicMetadata.parseFile(normalizedFilePath);
         const duration = metadata.format.duration || 0;
         
         // Try to read BPM and key from metadata tags
-        const bpm = metadata.common.bpm || findNativeTag(metadata, 'TBPM') || null;
-        const key = metadata.common.key || findNativeTag(metadata, 'TKEY') || null;
-        
+        const rawBpm = metadata.common.bpm || findNativeTag(metadata, 'TBPM') || null;
+        const rawKey = metadata.common.key || findNativeTag(metadata, 'TKEY') || null;
+
+        // ReplayGain: prefer music-metadata's parsed objects, fall back to native tags
+        const rgGainTag = metadata.common.replaygain_track_gain;
+        const rgPeakTag = metadata.common.replaygain_track_peak;
+        const replaygainTrackGain = (rgGainTag && typeof rgGainTag.dB === 'number')
+          ? parseReplaygainDb(rgGainTag.dB)
+          : parseReplaygainDb(findReplaygainNativeTag(metadata, 'REPLAYGAIN_TRACK_GAIN'));
+        const replaygainTrackPeak = (rgPeakTag && typeof rgPeakTag.ratio === 'number')
+          ? parseReplaygainPeak(rgPeakTag.ratio)
+          : parseReplaygainPeak(findReplaygainNativeTag(metadata, 'REPLAYGAIN_TRACK_PEAK'));
+
+        // Guard against zero-length or corrupted embedded image data
         let albumArt = null;
         if (metadata.common.picture && metadata.common.picture.length > 0) {
-          const pic = metadata.common.picture[0];
-          albumArt = `data:${pic.format};base64,${pic.data.toString('base64')}`;
+          // Find the best quality picture (usually type 'Front Cover')
+          let pic = metadata.common.picture.find(p => p.type === 'Front Cover') || metadata.common.picture[0];
+
+          if (pic.data && pic.data.length > 100) {
+            // Ensure the format is a valid MIME type (e.g. 'image/jpeg')
+            let mimeType = (pic.format || 'image/jpeg').toLowerCase();
+            if (!mimeType.includes('/')) {
+              mimeType = 'image/' + mimeType;
+            }
+            // Standardise common variations
+            if (mimeType === 'image/jpg') mimeType = 'image/jpeg';
+
+            albumArt = `data:${mimeType};base64,${pic.data.toString('base64')}`;
+            console.log(`[Scan] Extracted album art for ${normalizedFilePath} (${pic.data.length} bytes)`);
+          }
         }
-        
+
+        const rawGenre = metadata.common.genre && metadata.common.genre.length > 0
+          ? metadata.common.genre[0] : '';
+
         const track = {
-          path: filePath,
-          title: metadata.common.title || path.basename(filePath, path.extname(filePath)),
-          artist: metadata.common.artist || 'Unknown Artist',
-          album: metadata.common.album || 'Unknown Album',
-          genre: metadata.common.genre && metadata.common.genre.length > 0 ? metadata.common.genre[0] : 'Unknown',
+          path: normalizedFilePath,
+          title: sanitizeText(metadata.common.title) || path.basename(normalizedFilePath, path.extname(normalizedFilePath)),
+          artist: sanitizeText(metadata.common.artist, 'Unknown Artist'),
+          album: sanitizeText(metadata.common.album, 'Unknown Album'),
+          genre: sanitizeText(rawGenre, 'Unknown'),
           duration: duration,
-          bpm: bpm ? parseInt(bpm) : null,
-          key: key || null,
+          bpm: normalizeBpm(rawBpm),
+          key: normalizeKey(rawKey),
           albumArt: albumArt,
-          format: path.extname(filePath).slice(1)
+          replaygainTrackGain: replaygainTrackGain,
+          replaygainTrackPeak: replaygainTrackPeak,
+          format: path.extname(normalizedFilePath).slice(1)
         };
         
         current++;
         event.sender.send('scan-progress', { current, total, track });
       } catch (err) {
-        console.error(`Error parsing metadata for file ${filePath}:`, err);
+        console.error(`Error parsing metadata for file ${normalizedFilePath}:`, err);
         current++;
         
         // Fallback for files that throw errors but are valid extensions
         const track = {
-          path: filePath,
-          title: path.basename(filePath, path.extname(filePath)),
+          path: normalizedFilePath,
+          title: path.basename(normalizedFilePath, path.extname(normalizedFilePath)),
           artist: 'Unknown Artist',
           album: 'Unknown Album',
           genre: 'Unknown',
@@ -347,7 +523,7 @@ ipcMain.on('start-scan', async (event, folders) => {
           bpm: null,
           key: null,
           albumArt: null,
-          format: path.extname(filePath).slice(1)
+          format: path.extname(normalizedFilePath).slice(1)
         };
         event.sender.send('scan-progress', { current, total, track });
       }
@@ -361,13 +537,14 @@ ipcMain.on('start-scan', async (event, folders) => {
 });
 
 // ID3 tag writer (Specifically for MP3s)
-ipcMain.handle('write-tags', async (event, { filePath, bpm, key }) => {
+ipcMain.handle('write-tags', async (event, { filePath, bpm, key, albumArtBase64 }) => {
   let attempts = 4;
   let delay = 250; // ms
+  const normalizedFilePath = normalizePath(filePath);
   
   while (attempts > 0) {
     try {
-      const ext = path.extname(filePath).toLowerCase();
+      const ext = path.extname(normalizedFilePath).toLowerCase();
       if (ext !== '.mp3') {
         return { success: false, error: 'Only MP3 files support direct ID3 tag writing in this version.' };
       }
@@ -380,7 +557,18 @@ ipcMain.handle('write-tags', async (event, { filePath, bpm, key }) => {
         tags.initialKey = key;
       }
 
-      const success = NodeID3.update(tags, filePath);
+      if (albumArtBase64) {
+        const base64Data = albumArtBase64.split(',')[1] || albumArtBase64;
+        const imageBuffer = Buffer.from(base64Data, 'base64');
+        tags.image = {
+          mime: "image/jpeg",
+          type: { id: 3, name: "front cover" },
+          description: "Album Art extracted by YOP DJ",
+          imageBuffer: imageBuffer
+        };
+      }
+
+      const success = NodeID3.update(tags, normalizedFilePath);
       if (success === true) {
         return { success: true };
       } else if (success instanceof Error) {
@@ -391,7 +579,7 @@ ipcMain.handle('write-tags', async (event, { filePath, bpm, key }) => {
     } catch (err) {
       attempts--;
       if (attempts === 0) {
-        console.error(`Error writing tags to ${filePath} after multiple retries:`, err);
+        console.error(`Error writing tags to ${normalizedFilePath} after multiple retries:`, err);
         return { success: false, error: err.message, code: err.code || err.errno };
       }
       // Wait before retrying
@@ -400,43 +588,6 @@ ipcMain.handle('write-tags', async (event, { filePath, bpm, key }) => {
     }
   }
 });
-
-// Helper to convert library data to Markdown format
-function libraryToMarkdown(libraryData) {
-  const folders = libraryData.folders || [];
-  const library = libraryData.library || [];
-  
-  let md = `# Music Library Database\n\n`;
-  md += `This file acts as the local database for Your Own Personal DJ. Feel free to view or edit the BPM and Key columns manually.\n\n`;
-  
-  md += `## Scanned Folders\n`;
-  folders.forEach(f => {
-    md += `- ${f}\n`;
-  });
-  md += `\n`;
-  
-  md += `## Track Database\n\n`;
-  md += `| Title | Artist | Album | Genre | BPM | Key | Mood | BeatOffset | Duration | Format | Path |\n`;
-  md += `| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n`;
-  
-  library.forEach(t => {
-    const title = (t.title || '').replace(/\|/g, '\\|');
-    const artist = (t.artist || '').replace(/\|/g, '\\|');
-    const album = (t.album || '').replace(/\|/g, '\\|');
-    const genre = (t.genre || '').replace(/\|/g, '\\|');
-    const bpm = t.bpm !== null && t.bpm !== undefined ? t.bpm : '';
-    const key = t.key || '';
-    const mood = t.mood || '';
-    const beatOffset = t.beatOffset !== null && t.beatOffset !== undefined ? t.beatOffset : '';
-    const duration = t.duration || 0;
-    const format = t.format || '';
-    const filePath = (t.path || '').replace(/\|/g, '\\|');
-    
-    md += `| ${title} | ${artist} | ${album} | ${genre} | ${bpm} | ${key} | ${mood} | ${beatOffset} | ${duration} | ${format} | ${filePath} |\n`;
-  });
-  
-  return md;
-}
 
 // Helper to parse Markdown back into library data
 function markdownToLibrary(mdString) {
