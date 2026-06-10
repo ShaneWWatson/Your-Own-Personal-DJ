@@ -25,7 +25,7 @@ let state = {
   isEnrichmentEnabled: true,
   
   // DJ Settings
-  crossfadeDuration: 6,
+  crossfadeDuration: 10, // must match the audio-renderer default and the settings slider value
   isCrossfading: false,
   masterVolume: 0.8,
   outputDeviceId: 'default',
@@ -43,7 +43,7 @@ const moodProfiles = {
 };
 
 // Base64 encoded generic record label to ensure it loads reliably across all systems
-const GENERIC_LABEL_SVG = `data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDAiIGhlaWdodD0iMTAwIiB2aWV3Qm94PSIwIDAgMTAwIDEwMCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJncmFkIiB4MT0iMCUiIHkxPSIwJSIgeDI9IjEwMCUiIHkyPSIxMDAlIj48c3RvcCBvZmZzZXQ9IjAlIiBzdG9wLWNvbG9yPSIjOGI1Y2Y2IiAvPjxzdG9wIG9mZnNldD0iMTAwJSIgc3RvcC1jb2xvcj0iI2VjNDg5OSIgLz48L2xpbmVhckdyYWRpZW50PjwvZGVmcz48Y2lyY2xlIGN4PSI1MCIgY3k9IjUwIiByPSI1MCIgZmlsbD0idXJsKCNncmFkKSIgLz48Y2lyY2xlIGN4PSI1MCIgY3k9IjUwIiByPSI0NCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJyZ2JhKDI1NSwyNTUsMjU1LDAuMjUpIiBzdHJva2Utd2lkdGg9IjEuNSIgLz48Y2lyY2xlIGN4PSI1MCIgY3k9IjUwIiByPSIzOCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJyZ2JhKDI1NSwyNTUsMjU1LDAuMTUpIiBzdHJva2Utd2lkdGg9IjEiIC8+PGNpcmNsZSBjeD0iMTAwIiBjeT0iNTAiIGN5PSI1MCIgcj0iMjgiIGZpbGw9Im5vbmUiIHN0cm9rZT0icmdiYSgyNTUsMjU1LDI1NSwwLjEpIiBzdHJva2Utd2lkdGg9IjEiIC8+PGNpcmNsZSBjeD0iMTAwIiBjeT0iNTAiIGN5PSI1MCIgcj0iOSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJyZ2JhKDI1NSwyNTUsMjU1LDAuMykiIHN0cm9rZS13aWR0aD0iMSIgLz48dGV4dCB4PSI1MCIgeT0iMzgiIGZvbnQtZmFtaWx5PSJzeXN0ZW0tdWksIC1hcHBsZS1zeXN0ZW0sIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTIiIGZvbnQtd2VpZ2h0PSI5MDAiIGZpbGw9IiNmZmZmZmYiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGxldHRlci1zcGFjaW5nPSIxIj5ZT1A8L3RleHQ+PHRleHQgeD0iMTAwIiB5PSI3MCIgZm9udC1mYW1pbHk9InN5c3RlbS11aSwgLWFwcGxlLXN5c3RlbSwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxMiIgZm9udC13ZWlnaHQ9IjkwMCIgZmlsbD0iI2ZmZmZmZiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgbGV0dGVyLXNwYWNpbmc9IjEiPkRKPC90ZXh0Pjx0ZXh0IHg9IjUwIiB5PSIyMiIgZm9udC1mYW1pbHk9InN5c3RlbS11aSwgLWFwcGxlLXN5c3RlbSwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSI0IiBmb250LXdlaWdodD0iNzAwIiBmaWxsPSJyZ2JhKDI1NSwyNTUsMjU1LDAuOCkiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGxldHRlci1zcGFjaW5nPSIyIj5QRVJTT05BTCBNSVg8L3RleHQ+PHRleHQgeD0iMTAwIiB5PSI4MiIgZm9udC1mYW1pbHk9InN5c3RlbS11aSwgLWFwcGxlLXN5c3RlbSwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSI0IiBmb250LXdlaWdodD0iNzAwIiBmaWxsPSJyZ2JhKDI1NSwyNTUsMjU1LDAuOCkiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGxldHRlci1zcGFjaW5nPSIyIj5BSSBNVVNJQyBFTkdJTkU8L3RleHQ+PC9zdmc+`;
+const GENERIC_LABEL_SVG = `data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDAiIGhlaWdodD0iMTAwIiB2aWV3Qm94PSIwIDAgMTAwIDEwMCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJncmFkIiB4MT0iMCUiIHkxPSIwJSIgeDI9IjEwMCUiIHkyPSIxMDAlIj48c3RvcCBvZmZzZXQ9IjAlIiBzdG9wLWNvbG9yPSIjOGI1Y2Y2IiAvPjxzdG9wIG9mZnNldD0iMTAwJSIgc3RvcC1jb2xvcj0iI2VjNDg5OSIgLz48L2xpbmVhckdyYWRpZW50PjwvZGVmcz48Y2lyY2xlIGN4PSI1MCIgY3k9IjUwIiByPSI1MCIgZmlsbD0idXJsKCNncmFkKSIgLz48Y2lyY2xlIGN4PSI1MCIgY3k9IjUwIiByPSI0NCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJyZ2JhKDI1NSwyNTUsMjU1LDAuMjUpIiBzdHJva2Utd2lkdGg9IjEuNSIgLz48Y2lyY2xlIGN4PSI1MCIgY3k9IjUwIiByPSIzOCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJyZ2JhKDI1NSwyNTUsMjU1LDAuMTUpIiBzdHJva2Utd2lkdGg9IjEiIC8+PGNpcmNsZSBjeD0iNTAiIGN5PSI1MCIgcj0iMjgiIGZpbGw9Im5vbmUiIHN0cm9rZT0icmdiYSgyNTUsMjU1LDI1NSwwLjEpIiBzdHJva2Utd2lkdGg9IjEiIC8+PGNpcmNsZSBjeD0iNTAiIGN5PSI1MCIgcj0iOSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJyZ2JhKDI1NSwyNTUsMjU1LDAuMykiIHN0cm9rZS13aWR0aD0iMSIgLz48dGV4dCB4PSI1MCIgeT0iMzgiIGZvbnQtZmFtaWx5PSJzeXN0ZW0tdWksIC1hcHBsZS1zeXN0ZW0sIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTIiIGZvbnQtd2VpZ2h0PSI5MDAiIGZpbGw9IiNmZmZmZmYiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGxldHRlci1zcGFjaW5nPSIxIj5ZT1A8L3RleHQ+PHRleHQgeD0iNTAiIHk9IjcwIiBmb250LWZhbWlseT0ic3lzdGVtLXVpLCAtYXBwbGUtc3lzdGVtLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjEyIiBmb250LXdlaWdodD0iOTAwIiBmaWxsPSIjZmZmZmZmIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBsZXR0ZXItc3BhY2luZz0iMSI+REo8L3RleHQ+PHRleHQgeD0iNTAiIHk9IjIyIiBmb250LWZhbWlseT0ic3lzdGVtLXVpLCAtYXBwbGUtc3lzdGVtLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjQiIGZvbnQtd2VpZ2h0PSI3MDAiIGZpbGw9InJnYmEoMjU1LDI1NSwyNTUsMC44KSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgbGV0dGVyLXNwYWNpbmc9IjIiPlBFUlNPTkFMIE1JWDwvdGV4dD48dGV4dCB4PSI1MCIgeT0iODIiIGZvbnQtZmFtaWx5PSJzeXN0ZW0tdWksIC1hcHBsZS1zeXN0ZW0sIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iNCIgZm9udC13ZWlnaHQ9IjcwMCIgZmlsbD0icmdiYSgyNTUsMjU1LDI1NSwwLjgpIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBsZXR0ZXItc3BhY2luZz0iMiI+QUkgTVVTSUMgRU5HSU5FPC90ZXh0Pjwvc3ZnPg==`;
 
 // DOM Elements
 const foldersList = document.getElementById('folders-list');
@@ -859,8 +859,13 @@ window.api.onScanComplete(async (data) => {
   checkScanButtonState();
   scanProgressContainer.classList.add('hidden');
   
-  // Clean up dead/deleted paths that were not found in the scan
-  if (state.scannedPaths) {
+  // Clean up dead/deleted paths that were not found in the scan.
+  // Skip cleanup entirely if the scan errored or found nothing — otherwise a
+  // disconnected drive or failed scan would wipe the whole library.
+  if (data.error || data.total === 0) {
+    delete state.scannedPaths;
+    if (data.error) logConsole(`Scan failed: ${data.error}. Library left untouched.`, 'danger');
+  } else if (state.scannedPaths) {
     const deadTracks = state.library.filter(t => !state.scannedPaths.has(normalizePath(t.path)));
     const deadPaths = deadTracks.map(t => normalizePath(t.path));
     
@@ -931,12 +936,13 @@ async function backgroundMetadataProcessor() {
       t.mood === null ||
       t.beatOffset === undefined ||
       t.beatOffset === null ||
-      (t.loudness === undefined && t.loudness === null && t.replaygainTrackGain === undefined && t.replaygainTrackGain === null)
+      ((t.loudness === undefined || t.loudness === null) && (t.replaygainTrackGain === undefined || t.replaygainTrackGain === null))
     )
   );
   if (!track) return;
 
   isProcessingMetadata = true;
+  try {
   track.path = normalizePath(track.path);
 
   let bpm = track.bpm;
@@ -944,7 +950,8 @@ async function backgroundMetadataProcessor() {
   let mood = track.mood;
   let beatOffset = track.beatOffset;
 
-  const needsAnalysis = (bpm === null || key === null || mood === undefined || mood === null || beatOffset === undefined || beatOffset === null || (track.loudness === undefined || track.loudness === null));
+  const needsAnalysis = (bpm === null || key === null || mood === undefined || mood === null || beatOffset === undefined || beatOffset === null ||
+    ((track.loudness === undefined || track.loudness === null) && (track.replaygainTrackGain === undefined || track.replaygainTrackGain === null)));
 
   if (needsAnalysis) {
     let essentiaSuccess = false;
@@ -1069,7 +1076,7 @@ async function backgroundMetadataProcessor() {
   }
 
   // Write ID3 tags back to file in main process (if MP3)
-  if (track.format.toLowerCase() === 'mp3' && !track.undecodable) {
+  if ((track.format || '').toLowerCase() === 'mp3' && !track.undecodable) {
     const res = await window.api.writeTags(track.path, bpm, key, artworkToEmbed);
     if (res.success) {
       logConsole(`Successfully wrote tags (and art) to file: ${track.title}`, 'success');
@@ -1096,8 +1103,13 @@ async function backgroundMetadataProcessor() {
 
   // Attempt to optimize the current queue with this freshly analyzed track
   tryQueueOptimization(track);
-
-  isProcessingMetadata = false;
+  } catch (err) {
+    console.error('Background metadata processor error:', err);
+    logConsole(`Background analysis error for a track: ${err.message}`, 'danger');
+  } finally {
+    // Always release the lock so one bad track can't halt the whole pipeline
+    isProcessingMetadata = false;
+  }
 }
 
 /**
@@ -2385,18 +2397,18 @@ async function runTransientAnalysis(trackPath, knownBpm) {
     for (let p = 0; p < peakTimes.length; p++) {
       const peakTime = peakTimes[p];
       const amp = peakAmplitudes[p];
-      
+
       const rem = (peakTime - candidateOffset) % T;
       const dist = Math.min(Math.abs(rem), T - Math.abs(rem));
-      
+
       score += amp * Math.exp(-(dist * dist) / (2 * sigma * sigma));
     }
-    
+
     if (score > maxScore) {
       maxScore = score;
       bestOffset = candidateOffset;
     }
   }
-  
+
   return { bpm, beatOffset: parseFloat(bestOffset.toFixed(3)) };
 }

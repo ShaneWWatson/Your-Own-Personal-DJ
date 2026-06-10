@@ -320,7 +320,8 @@ button {
   border: 1px solid rgba(245, 158, 11, 0.2);
 }
 
-.ai-status-badge.disconnected {
+.ai-status-badge.disconnected,
+.ai-status-badge.offline {
   background: rgba(239, 68, 68, 0.1);
   color: var(--danger);
   border: 1px solid rgba(239, 68, 68, 0.2);
@@ -403,6 +404,10 @@ button {
 
 .console-line.info {
   color: var(--secondary);
+}
+
+.console-line.danger {
+  color: var(--danger);
 }
 
 /* Main Content Area */

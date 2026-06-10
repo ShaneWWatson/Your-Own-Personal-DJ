@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, protocol, net } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const url = require('url');
@@ -89,6 +89,13 @@ app.whenReady().then(() => {
         // Fix for Windows drive letters (e.g. \C:\ -> C:\)
         if (cleanPath.startsWith('\\') && cleanPath.charAt(2) === ':') {
           cleanPath = cleanPath.slice(1);
+        }
+
+        // Restrict art extraction to audio files only (same allowlist as streaming)
+        const artExt = path.extname(cleanPath).toLowerCase();
+        if (!['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.wma'].includes(artExt)) {
+          console.warn(`[Art Protocol Blocked] Non-audio file requested: ${cleanPath}`);
+          return new Response('Forbidden', { status: 403 });
         }
 
         if (!fs.existsSync(cleanPath)) {
@@ -188,8 +195,18 @@ app.whenReady().then(() => {
       if (range) {
         // Parse Range: e.g. "bytes=32768-" or "bytes=32768-65536"
         const parts = range.replace(/bytes=/, "").split("-");
-        const start = parseInt(parts[0], 10);
-        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        let start = parseInt(parts[0], 10);
+        let end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+
+        // Validate/clamp the range so malformed headers can't crash createReadStream
+        if (isNaN(start)) start = 0;
+        if (isNaN(end) || end >= fileSize) end = fileSize - 1;
+        if (start > end || start >= fileSize) {
+          return new Response('Range Not Satisfiable', {
+            status: 416,
+            headers: { 'Content-Range': `bytes */${fileSize}` }
+          });
+        }
         const chunksize = (end - start) + 1;
         
         const nodeStream = fs.createReadStream(filePath, { start, end });
@@ -704,6 +721,6 @@ ipcMain.handle('load-library', async () => {
   }
 });
 
-// NOTE: The legacy Gemma model-download/status IPC handlers were removed when
+// NOTE: The legacy Gemma model-download / status IPC handlers were removed when
 // the app migrated from the Gemma LLM to Essentia.js. Essentia's WebAssembly
 // ships bundled inside node_modules, so there is no model to fetch at runtime.

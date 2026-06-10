@@ -428,7 +428,9 @@ function startCrossfade(nextTrack) {
         });
         inactivePlayer.pause();
         inactivePlayer.playbackRate = 1.0;
-        activePlayer.volume = Math.min(1, masterVolume * incomingGainMul);
+        // Volume is managed by the Web Audio gain graph, not element.volume
+        activeGainNode.gain.setTargetAtTime(incomingGainMul, audioCtx.currentTime, 0.02);
+        inactiveGainNode.gain.setTargetAtTime(0, audioCtx.currentTime, 0.02);
         isCrossfading = false;
         sendEvent('crossfade-end');
     });

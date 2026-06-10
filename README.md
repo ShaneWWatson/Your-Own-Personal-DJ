@@ -25,9 +25,10 @@ Your Own Personal DJ is a premium desktop audio player built on Electron and the
 
 Your Own Personal DJ is designed to keep your project files clean and adhere to operating system standards:
 
-- **Local Database Cache (`library.md`)**:
-  - **Location**: `C:\Users\<username>\AppData\Local\YourOwnPersonalDJ\library.md` (or `%LOCALAPPDATA%\YourOwnPersonalDJ\library.md`).
+- **Local Database (IndexedDB)**:
+  - **Location**: `C:\Users\<username>\AppData\Local\YourOwnPersonalDJ\` (or `%LOCALAPPDATA%\YourOwnPersonalDJ\`). The app stores its track database, scanned folders, and play history in IndexedDB inside this directory.
   - **Why**: Windows applications should store cached data and user databases in the user's local AppData directory rather than the application bundle. This prevents workspace pollution, aligns with standard Windows folder permissions, and ensures your database persists even when updating, deleting, or rebuilding the program code.
+  - **Legacy `library.md`**: Older versions stored the library as a Markdown file at the same location. On first launch, the app automatically migrates it into IndexedDB and renames it to `library.md.migrated`.
 - **Media Files**:
   - **Location**: Your music files stay exactly where they are on your system. The app uses a secure custom Electron streaming protocol (`app-media://`) to stream audio directly from your local folders without copying, duplicating, or uploading them anywhere.
 - **ID3 Metadata Writing**:
@@ -39,7 +40,7 @@ Your Own Personal DJ is designed to keep your project files clean and adhere to 
 
 - **Packaged Standalone Executable**: ~**180 MB** (contains the packaged Electron container, Node.js runtime, and compiled native modules).
 - **Audio Analysis Engine**: Essentia.js ships **bundled** inside the application's `node_modules` (a few MB of WebAssembly). There is **no large model to download** at runtime and no network dependency for analysis.
-- **Database Cache (`library.md`)**: Typically less than **1 MB** (scales with the size of your music catalog; holds textual paths, titles, genres, BPM, key, mood, and beat offsets).
+- **Database (IndexedDB)**: Typically a few MB (scales with the size of your music catalog and embedded album art; holds paths, titles, genres, BPM, key, mood, beat offsets, and play history).
 - **Hardware Resources**:
   - **CPU**: Audio analysis runs in a background Web Worker so the UI stays responsive. Analysis is capped to the first ~90 seconds of each track to bound CPU time.
   - **Memory**: Electron processes typically consume between 150MB - 350MB of RAM during audio playback and background processing.
@@ -84,7 +85,7 @@ YourOwnPersonalDJ/
 ├── package.json                # App configurations, dependencies, and build scripts
 ├── LICENSE                     # GNU Affero General Public License v3.0
 ├── NOTICE                      # Third-party attributions
-├── LICENSES.chromium.html      # Detailed credits and licensing for used libraries
+├── LICENSES_chromium.html      # Detailed credits and licensing for used libraries
 ├── main.js                     # Main process: app lifecycle, IPC channels, and DB management
 ├── preload.js                  # IPC bridge: exposes secure file and ID3 APIs to frontend
 ├── index.html                  # Main user interface markup
@@ -102,4 +103,4 @@ YourOwnPersonalDJ/
 
 - **This Application**: Licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0-or-later)**. See the root [LICENSE](LICENSE) file. Copyright © 2026 Shane W Watson.
 - **Why AGPL**: This project depends on **Essentia.js**, which is licensed under the AGPL-3.0. To remain license-compliant, Your Own Personal DJ is distributed under the same license. If you modify this program and make it available to others over a network, the AGPL requires you to offer them the corresponding source code.
-- **Third-Party Software Components**: Detailed attributions are provided in the root [NOTICE](NOTICE) file. External open-source libraries (Essentia.js, Electron, Chromium, music-metadata, node-id3, etc.) are credited with their corresponding licenses in the [LICENSES.chromium.html](LICENSES.chromium.html) file.
+- **Third-Party Software Components**: Detailed attributions are provided in the root [NOTICE](NOTICE) file. External open-source libraries (Essentia.js, Electron, Chromium, music-metadata, node-id3, etc.) are credited with their corresponding licenses in the [LICENSES_chromium.html](LICENSES_chromium.html) file.

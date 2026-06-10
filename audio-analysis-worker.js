@@ -179,7 +179,7 @@ function analyze(samples, sampleRate) {
     signal = essentia.arrayToVector(slice);
 
     let bpm = null;
-    let beatOffset = 0;
+    let beatOffset = null; // null (not 0) so the renderer's transient-detector fallback can run if rhythm extraction fails
     let confidence = 0;
 
     try {
