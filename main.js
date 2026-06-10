@@ -28,6 +28,40 @@ if (!fs.existsSync(dbDir)) {
 app.setPath('userData', dbDir);
 const libraryCachePath = path.join(dbDir, 'library.md');
 
+// --- debug.log: persistent troubleshooting log next to the executable ---
+// Records everything shown in the in-app console window plus raw technical
+// error details, so problems can be decoded and troubleshot later.
+const debugLogDir = app.isPackaged ? path.dirname(process.execPath) : __dirname;
+const debugLogPath = path.join(debugLogDir, 'debug.log');
+let debugLogDisabled = false;
+
+// Rotate at 5 MB so the log never grows unbounded
+try {
+  const st = fs.statSync(debugLogPath);
+  if (st.size > 5 * 1024 * 1024) {
+    fs.renameSync(debugLogPath, debugLogPath + '.old');
+  }
+} catch (err) { /* no existing log — fine */ }
+
+function writeDebugLog(line) {
+  if (debugLogDisabled) return;
+  const stamp = new Date().toISOString();
+  const clean = String(line).replace(/\r?\n/g, ' ').slice(0, 4000);
+  fs.appendFile(debugLogPath, `[${stamp}] ${clean}\n`, (err) => {
+    if (err) {
+      // e.g. read-only install location — disable quietly rather than spam
+      debugLogDisabled = true;
+      console.error('debug.log writes disabled:', err.message);
+    }
+  });
+}
+
+writeDebugLog('=== Your Own Personal DJ session started ===');
+
+ipcMain.on('debug-log', (event, line) => {
+  if (typeof line === 'string') writeDebugLog(line);
+});
+
 let mainWindow;
 let audioWindow;
 
@@ -235,6 +269,7 @@ app.whenReady().then(() => {
       }
     } catch (err) {
       console.error('Protocol handler error:', err);
+      writeDebugLog(`[media-protocol-error] ${request.url}: ${err.message}`);
       return new Response('Error loading media', { status: 500 });
     }
   });
@@ -353,6 +388,18 @@ function sanitizeText(val, fallback = '') {
   if (val === null || val === undefined) return fallback;
   const cleaned = String(val).replace(/\0/g, '').trim();
   return cleaned || fallback;
+}
+
+// Reduce multi-genre tag dumps ("Rock;Pop;Dance/Electronic;...") — some files
+// carry 128+ characters spanning many genres — down to the first listed genre,
+// and cap runaway lengths. Returns 'Unknown' for blank values.
+function cleanGenre(val) {
+  let g = sanitizeText(val, '');
+  if (!g) return 'Unknown';
+  const first = g.split(/[;,|/•·]+/)[0].trim();
+  if (first) g = first;
+  if (g.length > 48) g = g.slice(0, 48).trim();
+  return g || 'Unknown';
 }
 
 // Accept any common BPM representation and return a plain integer, or null.
@@ -513,7 +560,7 @@ ipcMain.on('start-scan', async (event, folders) => {
           title: sanitizeText(metadata.common.title) || path.basename(normalizedFilePath, path.extname(normalizedFilePath)),
           artist: sanitizeText(metadata.common.artist, 'Unknown Artist'),
           album: sanitizeText(metadata.common.album, 'Unknown Album'),
-          genre: sanitizeText(rawGenre, 'Unknown'),
+          genre: cleanGenre(rawGenre),
           duration: duration,
           bpm: normalizeBpm(rawBpm),
           key: normalizeKey(rawKey),
@@ -549,6 +596,7 @@ ipcMain.on('start-scan', async (event, folders) => {
     event.sender.send('scan-complete', { total });
   } catch (err) {
     console.error('Scan error:', err);
+    writeDebugLog(`[scan-error] ${err.stack || err.message}`);
     event.sender.send('scan-complete', { total: 0, error: err.message });
   }
 });
@@ -597,12 +645,312 @@ ipcMain.handle('write-tags', async (event, { filePath, bpm, key, albumArtBase64 
       attempts--;
       if (attempts === 0) {
         console.error(`Error writing tags to ${normalizedFilePath} after multiple retries:`, err);
+        writeDebugLog(`[tag-write-error] ${normalizedFilePath}: ${err.message} (code: ${err.code || err.errno || 'n/a'})`);
         return { success: false, error: err.message, code: err.code || err.errno };
       }
       // Wait before retrying
       await new Promise(resolve => setTimeout(resolve, delay));
       delay *= 2; // exponential backoff (250ms, 500ms, 1000ms)
     }
+  }
+});
+
+// --- File Health: damage detection & safe MP3 repair ---
+//
+// Detection works for all supported formats (container/magic checks, plus the
+// renderer's decode results). Actual repair is only performed on MP3s, whose
+// frame-based structure allows rebuilding: corrupt tag blocks and garbage
+// bytes between valid MPEG frames are removed, valid frames and trailing tag
+// blocks (ID3v1 / APEv2 / Lyrics3) are preserved byte-for-byte. The original
+// file is always kept as a .bak backup before being replaced.
+
+const HEALTH_AUDIO_EXTS = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.wma'];
+
+const MP3_BITRATES = {
+  1: { // MPEG1
+    1: [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448],
+    2: [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384],
+    3: [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320]
+  },
+  2: { // MPEG2 / 2.5
+    1: [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256],
+    2: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
+    3: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160]
+  }
+};
+const MP3_SAMPLERATES = {
+  3: [44100, 48000, 32000], // MPEG1
+  2: [22050, 24000, 16000], // MPEG2
+  0: [11025, 12000, 8000]   // MPEG2.5
+};
+
+// Parse a 4-byte MPEG audio frame header. Returns { frameLen } or null.
+function parseMp3FrameHeader(buf, offset) {
+  if (offset + 4 > buf.length) return null;
+  const b1 = buf[offset + 1], b2 = buf[offset + 2];
+  if (buf[offset] !== 0xFF || (b1 & 0xE0) !== 0xE0) return null;
+
+  const versionBits = (b1 >> 3) & 0x03; // 0=2.5, 1=reserved, 2=MPEG2, 3=MPEG1
+  const layerBits = (b1 >> 1) & 0x03;   // 0=reserved, 1=III, 2=II, 3=I
+  if (versionBits === 1 || layerBits === 0) return null;
+
+  const bitrateIdx = (b2 >> 4) & 0x0F;
+  const samplerateIdx = (b2 >> 2) & 0x03;
+  if (bitrateIdx === 0 || bitrateIdx === 0x0F || samplerateIdx === 3) return null;
+
+  const padding = (b2 >> 1) & 0x01;
+  const layer = layerBits === 3 ? 1 : (layerBits === 2 ? 2 : 3);
+  const vKey = versionBits === 3 ? 1 : 2;
+  const bitrate = MP3_BITRATES[vKey][layer][bitrateIdx] * 1000;
+  const samplerate = MP3_SAMPLERATES[versionBits][samplerateIdx];
+  if (!bitrate || !samplerate) return null;
+
+  let frameLen;
+  if (layer === 1) {
+    frameLen = (Math.floor((12 * bitrate) / samplerate) + padding) * 4;
+  } else if (layer === 2 || versionBits === 3) {
+    frameLen = Math.floor((144 * bitrate) / samplerate) + padding;
+  } else {
+    frameLen = Math.floor((72 * bitrate) / samplerate) + padding; // MPEG2/2.5 Layer III
+  }
+  return frameLen >= 24 ? { frameLen } : null;
+}
+
+// Known, legitimate trailing tag blocks that must never be treated as junk
+function looksLikeKnownTrailer(buf, offset) {
+  const s = (n) => buf.toString('latin1', offset, Math.min(buf.length, offset + n));
+  return s(3) === 'TAG' || s(8) === 'APETAGEX' || s(11) === 'LYRICSBEGIN';
+}
+
+// Require `chain` consecutive valid frame headers starting at `pos` (guards
+// against random bytes that happen to look like a frame sync).
+function isSolidFrameChain(buf, pos, chain) {
+  let p = pos;
+  for (let i = 0; i < chain; i++) {
+    const h = parseMp3FrameHeader(buf, p);
+    if (!h || p + h.frameLen > buf.length) return false;
+    p += h.frameLen;
+    if (p >= buf.length - 4 || looksLikeKnownTrailer(buf, p)) return true; // hit EOF/trailer mid-chain: fine
+  }
+  return true;
+}
+
+/**
+ * Walk the MP3 byte stream and classify it.
+ * Returns { id3v2End, corruptId3, validFrames, junkBytes, junkRanges,
+ *           frameSegments, trailerStart }.
+ * The region from trailerStart to EOF (tag blocks, or harmless trailing data
+ * with no recoverable frames after it) is always preserved untouched.
+ */
+function analyzeMp3Structure(buf) {
+  let id3v2End = 0;
+  let corruptId3 = false;
+
+  if (buf.length >= 10 && buf[0] === 0x49 && buf[1] === 0x44 && buf[2] === 0x33) {
+    const b6 = buf[6], b7 = buf[7], b8 = buf[8], b9 = buf[9];
+    if (b6 < 128 && b7 < 128 && b8 < 128 && b9 < 128) {
+      let total = 10 + ((b6 << 21) | (b7 << 14) | (b8 << 7) | b9);
+      if ((buf[5] & 0x10) !== 0) total += 10; // footer present
+      if (total < buf.length) {
+        id3v2End = total;
+      } else {
+        corruptId3 = true; // tag claims to be larger than the file
+      }
+    } else {
+      corruptId3 = true; // malformed synchsafe size bytes
+    }
+  }
+
+  const frameSegments = [];
+  const junkRanges = [];
+  let junkBytes = 0;
+  let validFrames = 0;
+  let pos = corruptId3 ? 0 : id3v2End;
+  let trailerStart = buf.length;
+
+  while (pos < buf.length - 4) {
+    const chainNeeded = validFrames === 0 ? 3 : 1; // strict initial lock-on
+    const h = parseMp3FrameHeader(buf, pos);
+
+    let ok = false;
+    if (h && pos + h.frameLen <= buf.length && isSolidFrameChain(buf, pos, chainNeeded)) {
+      const next = pos + h.frameLen;
+      ok = next >= buf.length - 4 ||
+           parseMp3FrameHeader(buf, next) !== null ||
+           looksLikeKnownTrailer(buf, next);
+    }
+
+    if (ok) {
+      validFrames++;
+      const segLen = h.frameLen;
+      if (frameSegments.length > 0 && frameSegments[frameSegments.length - 1][1] === pos) {
+        frameSegments[frameSegments.length - 1][1] = pos + segLen; // extend contiguous run
+      } else {
+        frameSegments.push([pos, pos + segLen]);
+      }
+      pos += segLen;
+    } else {
+      // Sync lost — scan forward for the next solid frame chain
+      let scan = pos + 1;
+      let found = -1;
+      while (scan < buf.length - 4) {
+        if (buf[scan] === 0xFF && (buf[scan + 1] & 0xE0) === 0xE0 && isSolidFrameChain(buf, scan, 2)) {
+          found = scan;
+          break;
+        }
+        scan++;
+      }
+      if (found === -1) {
+        trailerStart = pos; // no more audio — everything from here is trailer
+        break;
+      }
+      junkBytes += (found - pos);
+      junkRanges.push([pos, found]);
+      pos = found;
+    }
+  }
+  if (trailerStart === buf.length && pos < buf.length) {
+    trailerStart = pos; // keep any final sub-4-byte remainder
+  }
+
+  return { id3v2End, corruptId3, validFrames, junkBytes, junkRanges, frameSegments, trailerStart };
+}
+
+// Container magic checks for non-MP3 formats (detection only)
+function checkContainerMagic(buf, ext) {
+  const s = (a, b) => buf.toString('latin1', a, b);
+  if (buf.length >= 3 && s(0, 3) === 'ID3') return true; // tag-prefixed files are normal
+  switch (ext) {
+    case '.wav': return buf.length >= 12 && s(0, 4) === 'RIFF' && s(8, 12) === 'WAVE';
+    case '.flac': return buf.length >= 4 && s(0, 4) === 'fLaC';
+    case '.ogg': return buf.length >= 4 && s(0, 4) === 'OggS';
+    case '.m4a': return buf.length >= 12 && s(4, 8) === 'ftyp';
+    case '.wma': return buf.length >= 4 && buf[0] === 0x30 && buf[1] === 0x26 && buf[2] === 0xB2 && buf[3] === 0x75;
+    default: return true;
+  }
+}
+
+const MIN_REPAIR_FRAMES = 20; // below this we can't trust the scan enough to rewrite
+
+ipcMain.handle('check-file-health', async (event, filePath) => {
+  try {
+    const normalized = normalizePath(filePath);
+    const ext = path.extname(normalized).toLowerCase();
+    if (!HEALTH_AUDIO_EXTS.includes(ext)) return { error: 'Not an audio file.' };
+    if (!fs.existsSync(normalized)) return { error: 'File not found.' };
+
+    const stat = fs.statSync(normalized);
+    if (stat.size === 0) {
+      return { format: ext, scannable: true, healthy: false, repairable: false, issues: ['The file is empty (0 bytes).'] };
+    }
+
+    if (ext !== '.mp3') {
+      // Non-MP3: container header check only (deep decode happens in renderer)
+      const fd = await fs.promises.open(normalized, 'r');
+      const head = Buffer.alloc(16);
+      await fd.read(head, 0, 16, 0);
+      await fd.close();
+      const magicOk = checkContainerMagic(head, ext);
+      return {
+        format: ext,
+        scannable: true,
+        healthy: magicOk,
+        repairable: false,
+        issues: magicOk ? [] : ['The file header does not match its format — the file may be misnamed, truncated, or damaged.']
+      };
+    }
+
+    const buf = await fs.promises.readFile(normalized);
+    const report = analyzeMp3Structure(buf);
+
+    if (report.validFrames < MIN_REPAIR_FRAMES) {
+      return {
+        format: ext,
+        scannable: false,
+        healthy: false,
+        repairable: false,
+        issues: ['Almost no readable audio data was found in this file.'],
+        validFrames: report.validFrames
+      };
+    }
+
+    const issues = [];
+    if (report.corruptId3) issues.push('corrupt tag block at the start of the file');
+    if (report.junkBytes > 0) issues.push(`${report.junkBytes} bytes of garbage data mixed into the audio stream`);
+
+    return {
+      format: ext,
+      scannable: true,
+      healthy: issues.length === 0,
+      repairable: issues.length > 0,
+      issues,
+      validFrames: report.validFrames,
+      junkBytes: report.junkBytes,
+      corruptId3: report.corruptId3
+    };
+  } catch (err) {
+    writeDebugLog(`[health-check-error] ${filePath}: ${err.message}`);
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('repair-file', async (event, filePath) => {
+  const normalized = normalizePath(filePath);
+  const tmpPath = normalized + '.repairtmp';
+  try {
+    const ext = path.extname(normalized).toLowerCase();
+    if (ext !== '.mp3') return { success: false, reason: 'Only MP3 files can be auto-repaired.' };
+    if (!fs.existsSync(normalized)) return { success: false, reason: 'File not found.' };
+
+    const buf = await fs.promises.readFile(normalized);
+    const report = analyzeMp3Structure(buf);
+
+    if (report.validFrames < MIN_REPAIR_FRAMES) {
+      return { success: false, reason: 'Too little readable audio remains to rebuild this file safely.' };
+    }
+    if (!report.corruptId3 && report.junkBytes === 0) {
+      return { success: false, reason: 'No repairable damage was found.' };
+    }
+
+    // Assemble: [valid ID3v2 tag] + [valid frame runs] + [untouched trailer]
+    const parts = [];
+    if (!report.corruptId3 && report.id3v2End > 0) parts.push(buf.subarray(0, report.id3v2End));
+    for (const [from, to] of report.frameSegments) parts.push(buf.subarray(from, to));
+    if (report.trailerStart < buf.length) parts.push(buf.subarray(report.trailerStart));
+    const rebuilt = Buffer.concat(parts);
+
+    // Verify the rebuilt stream before touching the original
+    const verify = analyzeMp3Structure(rebuilt);
+    if (verify.junkBytes !== 0 || verify.corruptId3 || verify.validFrames < report.validFrames) {
+      return { success: false, reason: 'The rebuilt file failed verification — the original was left untouched.' };
+    }
+
+    // Find a free .bak name (never overwrite an earlier backup)
+    let backupPath = normalized + '.bak';
+    let n = 1;
+    while (fs.existsSync(backupPath)) {
+      backupPath = `${normalized}.bak${n}`;
+      n++;
+    }
+
+    await fs.promises.writeFile(tmpPath, rebuilt);
+    await fs.promises.copyFile(normalized, backupPath);
+    await fs.promises.rename(tmpPath, normalized);
+
+    writeDebugLog(`[repair] ${normalized}: removed ${report.junkBytes} junk bytes, ` +
+      `${report.corruptId3 ? 'dropped corrupt ID3v2 tag, ' : ''}kept ${report.validFrames} frames. Backup: ${backupPath}`);
+
+    return {
+      success: true,
+      junkRemoved: report.junkBytes,
+      framesKept: report.validFrames,
+      removedCorruptTag: report.corruptId3,
+      backupName: path.basename(backupPath)
+    };
+  } catch (err) {
+    try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch (e) { /* best effort */ }
+    writeDebugLog(`[repair-error] ${filePath}: ${err.message} (code: ${err.code || 'n/a'})`);
+    return { success: false, reason: err.message, code: err.code };
   }
 });
 

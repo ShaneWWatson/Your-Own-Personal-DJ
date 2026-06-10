@@ -48,10 +48,10 @@ const ENGINE_NAME = 'Essentia.js (Local Audio Analysis)';
 // this window, and it bounds CPU time on long tracks.
 const MAX_ANALYSIS_SECONDS = 90;
 
-function sendStatus(status, model, log, logType) {
+function sendStatus(status, model, log, logType, detail) {
   postMessage({
     type: 'status-update',
-    data: { status, model, log, logType }
+    data: { status, model, log, logType, detail }
   });
 }
 
@@ -79,7 +79,13 @@ async function initEssentia() {
   } catch (err) {
     console.error('Essentia.js failed to initialize:', err);
     engineStatus = 'fallback';
-    sendStatus('fallback', 'Local Heuristic Engine', `Essentia.js load failed: ${err.message}. Operating in heuristic mode.`, 'danger');
+    sendStatus(
+      'fallback',
+      'Local Heuristic Engine',
+      'The audio analysis engine could not start, so BPM, key, and mood will be estimated from file information instead. Playback still works normally. (Technical details saved to debug.log.)',
+      'danger',
+      `Essentia.js load failed: ${err.message}`
+    );
   }
 }
 

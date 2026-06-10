@@ -18,6 +18,7 @@ Your Own Personal DJ is a premium desktop audio player built on Electron and the
 - **Heuristic DJ Selection Engine**: Picks the next track using a transparent, rule-based scoring engine that weighs mood, tempo proximity, harmonic key, and genre compatibility — with guardrails against jarring transitions (e.g. bridging between mild and heavy genres) and repeat-protection windows.
 - **Vibrant Glassmorphic UI**: Includes a responsive, hardware-accelerated disc animation, simulated canvas visualizer, queue list, settings panel, and a live console outputting analysis diagnostics.
 - **Internet Metadata Enrichment**: Pulls releases, tags, genres, and release years asynchronously from the public **MusicBrainz API** for the currently playing track.
+- **File Health Scan & MP3 Repair**: Every file is inspected in the background for structural damage. MP3s with repairable damage (garbage bytes in the audio stream, corrupt tag blocks) are automatically rebuilt frame-by-frame — the original is always kept as a `.bak` backup next to the file. Other formats are flagged in the console so you know to re-rip or re-download them.
 
 ---
 
@@ -33,6 +34,9 @@ Your Own Personal DJ is designed to keep your project files clean and adhere to 
   - **Location**: Your music files stay exactly where they are on your system. The app uses a secure custom Electron streaming protocol (`app-media://`) to stream audio directly from your local folders without copying, duplicating, or uploading them anywhere.
 - **ID3 Metadata Writing**:
   - For `.mp3` files, estimated BPM and Key tags are written directly back to the files' ID3 metadata tags (using standard ID3v2.3 headers) in the background so that they remain available to other media players.
+- **Debug Log (`debug.log`)**:
+  - **Location**: Same directory as the executable (the project folder during development).
+  - **What it records**: Everything shown in the in-app console window, plus raw technical error details behind the user-friendly messages, so issues can be decoded and troubleshot later. Rotates automatically at 5 MB (`debug.log.old`).
 
 ---
 

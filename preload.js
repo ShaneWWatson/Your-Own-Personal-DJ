@@ -9,6 +9,9 @@ contextBridge.exposeInMainWorld('api', {
   getSystemMusicFolder: () => ipcRenderer.invoke('get-system-music-folder'),
   loadLibrary: () => ipcRenderer.invoke('load-library'),
   openExternal: (url) => ipcRenderer.send('open-external', url),
+  logDebug: (line) => ipcRenderer.send('debug-log', line),
+  checkFileHealth: (filePath) => ipcRenderer.invoke('check-file-health', filePath),
+  repairFile: (filePath) => ipcRenderer.invoke('repair-file', filePath),
   
   // Audio Process Communication Bridge
   sendToAudio: (data) => ipcRenderer.send('to-audio-player', data),

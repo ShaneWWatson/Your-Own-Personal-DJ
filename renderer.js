@@ -310,6 +310,9 @@ async function initAIWorker() {
       if (log) {
         logConsole(log, logType || 'system');
       }
+      if (data.detail && window.api.logDebug) {
+        window.api.logDebug(`[engine-detail] ${data.detail}`);
+      }
     } else {
       const pending = pendingWorkerRequests.get(id);
       if (pending) {
@@ -325,7 +328,8 @@ async function initAIWorker() {
 
   aiWorker.onerror = (err) => {
     console.error('AI Web Worker Error:', err);
-    logConsole(`AI Web Worker Error: ${err.message}`, 'danger');
+    if (window.api.logDebug) window.api.logDebug(`[worker-error] ${err.message || 'unknown worker error'}`);
+    logConsole('The audio analysis engine ran into a problem — analysis will continue with a simpler method. (Details saved to debug.log.)', 'danger');
   };
 
   // Essentia.js WebAssembly ships bundled with the app — no model download needed.
@@ -525,6 +529,13 @@ window.addEventListener('load', async () => {
 
   // Start background metadata processor
   setInterval(backgroundMetadataProcessor, 6000);
+
+  // Start background album-art inspector/repairer (staggered so the two
+  // processors and MusicBrainz requests don't pile up)
+  setInterval(backgroundArtProcessor, 9000);
+
+  // Start background file-health inspector (damage detection + MP3 repair)
+  setInterval(backgroundHealthProcessor, 10000);
 });
 
 window.addEventListener('resize', () => {
@@ -535,13 +546,24 @@ window.addEventListener('resize', () => {
 function logConsole(message, type = 'system') {
   const line = document.createElement('div');
   line.className = `console-line ${type}`;
-  
+
   const now = new Date();
   const timeStr = now.toTimeString().split(' ')[0];
   line.innerText = `[${timeStr}] ${message}`;
-  
+
+  // Only follow the newest message if the user is already at (or near) the
+  // bottom of the log. If they have scrolled up to read something, leave
+  // their view exactly where it is.
+  const wasAtBottom = (aiConsole.scrollHeight - aiConsole.scrollTop - aiConsole.clientHeight) < 24;
   aiConsole.appendChild(line);
-  aiConsole.scrollTop = aiConsole.scrollHeight;
+  if (wasAtBottom) {
+    aiConsole.scrollTop = aiConsole.scrollHeight;
+  }
+
+  // Mirror every console line into debug.log (written next to the executable)
+  if (window.api.logDebug) {
+    window.api.logDebug(`[${type}] ${message}`);
+  }
 }
 
 // Custom Notification Dialog
@@ -773,6 +795,10 @@ btnStartScan.addEventListener('click', async () => {
     track.loudness = null;
     track.undecodable = false;
     delete track.isHeuristic;
+    delete track.endingCold;
+    delete track.artCheckedAt;
+    delete track.healthCheckedAt;
+    delete track.health;
 
     // We only clear albumArt if it's NOT a high-quality external URL or long base64 string
     // to give the system a chance to re-fetch/embed it if it was missing or low-res.
@@ -835,8 +861,11 @@ window.api.onScanProgress(async (data) => {
     if (state.library[existingIdx].undecodable) {
       track.undecodable = true;
     }
-    if (!track.albumArt && state.library[existingIdx].albumArt) {
+    if (!isAlbumArtValid(track.albumArt) && isAlbumArtValid(state.library[existingIdx].albumArt)) {
       track.albumArt = state.library[existingIdx].albumArt;
+    }
+    if (state.library[existingIdx].endingCold !== undefined) {
+      track.endingCold = state.library[existingIdx].endingCold;
     }
     state.library[existingIdx] = track;
   } else {
@@ -885,6 +914,292 @@ window.api.onScanComplete(async (data) => {
   showNotification('Scanning Completed', `Successfully scanned and cataloged ${data.total} music tracks.`);
 });
 
+// --- Shared analysis / repair helpers ---
+
+/**
+ * Translate technical errors into plain language for the console.
+ * The raw technical message is always preserved in debug.log.
+ */
+function friendlyError(err, context) {
+  const raw = (err && err.message) ? err.message : String(err);
+  if (window.api.logDebug) window.api.logDebug(`[error-detail] ${context}: ${raw}`);
+  const msg = raw.toLowerCase();
+
+  if (msg.includes('decod')) {
+    return 'This file could not be read as audio — it may be damaged or in a format the player does not support.';
+  }
+  if (msg.includes('fetch failed') || msg.includes('404') || msg.includes('not found')) {
+    return 'The file could not be opened — it may have been moved, renamed, or deleted.';
+  }
+  if (msg.includes('not active') || msg.includes('not ready')) {
+    return 'The audio analysis engine is still warming up — this song will be retried automatically.';
+  }
+  if (msg.includes('memory') || msg.includes('abort') || msg.includes('wasm') || msg.includes('out of bounds')) {
+    return 'The analysis engine hit a snag on this song — switching to a simpler method.';
+  }
+  if (msg.includes('network') || msg.includes('failed to fetch') || msg.includes('offline')) {
+    return 'No internet connection right now — online features will retry later.';
+  }
+  return 'Something unexpected went wrong with this song (technical details were saved to debug.log).';
+}
+
+/**
+ * Detect a "cold" (abrupt) song ending by comparing the loudness of the final
+ * second against the loudness of the preceding ~15 seconds. Songs that are
+ * still loud right up to the last moment end cold; songs that taper off were
+ * mastered with a fade-out.
+ */
+function detectColdEnding(samples, sampleRate) {
+  const n = samples.length;
+  if (!n || n < sampleRate * 5) return false;
+
+  const rmsOf = (start, end) => {
+    let sum = 0, count = 0;
+    for (let i = Math.max(0, start); i < Math.min(n, end); i += 4) {
+      sum += samples[i] * samples[i];
+      count++;
+    }
+    return Math.sqrt(sum / (count || 1));
+  };
+
+  const tail = rmsOf(n - Math.floor(sampleRate * 1.0), n);
+  const body = rmsOf(n - Math.floor(sampleRate * 16), n - Math.floor(sampleRate * 1.0));
+  if (body <= 0.0001) return false;
+
+  return (tail / body) > 0.5;
+}
+
+/**
+ * Validate stored album art. Catches missing art, stub-length data URLs, and
+ * corrupt base64 whose decoded bytes are not a real image (JPEG/PNG/GIF/WebP/BMP).
+ */
+function isAlbumArtValid(art) {
+  if (!art) return false;
+  const s = String(art);
+  if (s.startsWith('https://')) return true;
+  if (!s.startsWith('data:image/')) return false;
+
+  const comma = s.indexOf(',');
+  if (comma === -1 || s.length - comma < 500) return false;
+
+  try {
+    const head = atob(s.slice(comma + 1, comma + 25));
+    const b = [];
+    for (let i = 0; i < head.length; i++) b.push(head.charCodeAt(i));
+
+    if (b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF) return true;            // JPEG
+    if (b[0] === 0x89 && head.slice(1, 4) === 'PNG') return true;                // PNG
+    if (head.startsWith('GIF8')) return true;                                    // GIF
+    if (head.startsWith('RIFF') && head.slice(8, 12) === 'WEBP') return true;    // WebP
+    if (head.startsWith('BM')) return true;                                      // BMP
+    return false;
+  } catch (e) {
+    return false; // base64 itself is corrupt
+  }
+}
+
+/**
+ * Reduce multi-genre tag dumps ("Rock;Pop;Dance/Electronic;...") to the first
+ * listed genre and cap runaway lengths. Returns 'Unknown' for blank values.
+ */
+function cleanGenre(val) {
+  if (val === null || val === undefined) return 'Unknown';
+  let g = String(val).replace(/\0/g, '').trim();
+  if (!g) return 'Unknown';
+
+  const first = g.split(/[;,|/•·]+/)[0].trim();
+  if (first) g = first;
+  if (g.length > 48) g = g.slice(0, 48).trim();
+
+  return g || 'Unknown';
+}
+
+/**
+ * Look a track up on MusicBrainz and fetch its cover art from the Cover Art
+ * Archive. Returns a base64 data URL, or null if nothing usable was found.
+ */
+async function fetchArtFromMusicBrainz(track) {
+  const artistClean = (track.artist || '').replace(/feat\..*/i, '').replace(/ft\..*/i, '').trim();
+  const query = `artist:"${artistClean}" AND recording:"${track.title}"`;
+  const url = `https://musicbrainz.org/ws/2/recording/?query=${encodeURIComponent(query)}&fmt=json`;
+
+  const response = await fetch(url, { headers: { 'User-Agent': 'YourOwnPersonalDJ/1.0.0' } });
+  if (!response.ok) return null;
+
+  const data = await response.json();
+  const recordings = data.recordings || [];
+  if (recordings.length === 0 || !recordings[0].releases || recordings[0].releases.length === 0) return null;
+
+  const releaseId = recordings[0].releases[0].id;
+  const imgResp = await fetch(`https://coverartarchive.org/release/${releaseId}/front-250`);
+  if (!imgResp.ok) return null;
+
+  const blob = await imgResp.blob();
+  const dataUrl = await new Promise(resolve => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.readAsDataURL(blob);
+  });
+
+  return isAlbumArtValid(dataUrl) ? dataUrl : null;
+}
+
+// --- Background Album Art Repair ---
+// Independently inspects the library for missing or corrupt artwork and
+// repairs it from MusicBrainz: saved to the database, and embedded into the
+// file's ID3 tags for MP3s. Unfixable tracks are rechecked after 7 days.
+let isFetchingArt = false;
+const ART_RECHECK_MS = 7 * 24 * 60 * 60 * 1000;
+
+async function backgroundArtProcessor() {
+  if (isFetchingArt || isProcessingMetadata || state.isScanning || state.library.length === 0) return;
+
+  const track = state.library.find(t =>
+    !isAlbumArtValid(t.albumArt) &&
+    (!t.artCheckedAt || (Date.now() - t.artCheckedAt) > ART_RECHECK_MS)
+  );
+  if (!track) return;
+
+  isFetchingArt = true;
+  try {
+    const hadCorrupt = !!track.albumArt;
+    if (hadCorrupt) {
+      logConsole(`Album art for "${track.title}" looks corrupt — replacing it from MusicBrainz...`, 'info');
+      track.albumArt = null;
+    } else {
+      logConsole(`Album art missing for "${track.title}" — searching MusicBrainz...`, 'info');
+    }
+
+    const dataUrl = await fetchArtFromMusicBrainz(track);
+    if (dataUrl) {
+      track.albumArt = dataUrl;
+      delete track.artCheckedAt;
+
+      if ((track.format || '').toLowerCase() === 'mp3' && !track.undecodable) {
+        const res = await window.api.writeTags(track.path, track.bpm, track.key, dataUrl);
+        if (!res.success && window.api.logDebug) {
+          window.api.logDebug(`[art-embed] Could not embed art into ${track.path}: ${res.error}`);
+        }
+      }
+
+      logConsole(`Album art repaired for "${track.title}" (saved to database${(track.format || '').toLowerCase() === 'mp3' ? ' and file tags' : ''}).`, 'success');
+
+      if (state.currentTrack && state.currentTrack.path === track.path) {
+        state.currentTrack.albumArt = dataUrl;
+        albumArt.src = dataUrl;
+      }
+    } else {
+      track.artCheckedAt = Date.now(); // nothing found — recheck in a week
+      logConsole(`No album art found online for "${track.title}" — will check again later.`, 'system');
+    }
+
+    await dbSaveTrack(track);
+  } catch (err) {
+    logConsole(`Album art lookup paused: ${friendlyError(err, 'art-repair')}`, 'warning');
+    track.artCheckedAt = Date.now();
+    try { await dbSaveTrack(track); } catch (e) { /* non-fatal */ }
+  } finally {
+    isFetchingArt = false;
+  }
+}
+
+// --- Background File Health Processor ---
+// Inspects each file once for structural damage. MP3s with repairable damage
+// are rebuilt automatically (the original is kept as a .bak backup); other
+// formats are flagged so the user knows to replace them. Repaired files are
+// sent back through audio analysis from scratch.
+let isCheckingHealth = false;
+
+async function backgroundHealthProcessor() {
+  if (isCheckingHealth || isProcessingMetadata || isFetchingArt || state.isScanning || state.library.length === 0) return;
+
+  // Files that failed to decode get checked first; then everything else, once
+  const track = state.library.find(t => t.undecodable && !t.healthCheckedAt) ||
+                state.library.find(t => !t.healthCheckedAt);
+  if (!track) return;
+
+  isCheckingHealth = true;
+  try {
+    track.path = normalizePath(track.path);
+    const report = await window.api.checkFileHealth(track.path);
+
+    if (!report || report.error) {
+      track.healthCheckedAt = Date.now();
+      track.health = 'unknown';
+      if (report && report.error && window.api.logDebug) {
+        window.api.logDebug(`[health] ${track.path}: ${report.error}`);
+      }
+      await dbSaveTrack(track);
+      return;
+    }
+
+    if (report.healthy) {
+      track.healthCheckedAt = Date.now();
+      track.health = 'good';
+      if (track.undecodable) {
+        logConsole(`"${track.title}" couldn't be decoded earlier, but its file structure looks intact — the encoding may simply be unsupported.`, 'info');
+      }
+      await dbSaveTrack(track);
+      return;
+    }
+
+    if (!report.scannable) {
+      // Structure unreadable — only alarming if playback/decoding also failed
+      track.healthCheckedAt = Date.now();
+      track.health = track.undecodable ? 'damaged' : 'unverified';
+      if (track.undecodable) {
+        logConsole(`"${track.title}" appears badly damaged — almost no readable audio was found, and it can't be repaired safely. Re-ripping or re-downloading it is the best fix.`, 'warning');
+      }
+      await dbSaveTrack(track);
+      return;
+    }
+
+    // Damage found
+    const issueText = (report.issues || []).join('; ');
+
+    if (report.repairable) {
+      // Never rewrite the song that is currently playing — retry later
+      if (state.currentTrack && state.currentTrack.path === track.path) {
+        return;
+      }
+
+      logConsole(`Found damage in "${track.title}" (${issueText}) — repairing now. The original is being saved as a backup.`, 'warning');
+      const result = await window.api.repairFile(track.path);
+      track.healthCheckedAt = Date.now();
+
+      if (result && result.success) {
+        track.health = 'repaired';
+        track.undecodable = false;
+        // Re-analyze the repaired audio from scratch
+        track.bpm = null;
+        track.key = null;
+        track.mood = null;
+        track.beatOffset = null;
+        track.loudness = null;
+        delete track.endingCold;
+        logConsole(`Repaired "${track.title}": removed ${result.junkRemoved} bytes of corrupted data${result.removedCorruptTag ? ' and a broken tag block' : ''}, kept all ${result.framesKept} good audio frames. Original saved as ${result.backupName}.`, 'success');
+      } else if (result && (result.code === 'EBUSY' || result.code === 'EPERM' || result.code === 'EACCES')) {
+        delete track.healthCheckedAt; // file in use / locked — retry later
+        logConsole(`"${track.title}" is currently in use — repair will be retried later.`, 'info');
+      } else {
+        track.health = 'damaged';
+        logConsole(`Could not repair "${track.title}" safely — the file was left untouched. ${result && result.reason ? result.reason : ''}`, 'warning');
+      }
+    } else {
+      track.healthCheckedAt = Date.now();
+      track.health = 'damaged';
+      const fmt = (track.format || 'this').toUpperCase();
+      logConsole(`"${track.title}" appears damaged (${issueText}). ${fmt} files can't be auto-repaired — re-ripping or re-downloading it is the safest fix.`, 'warning');
+    }
+
+    await dbSaveTrack(track);
+  } catch (err) {
+    logConsole(`File health check paused: ${friendlyError(err, 'health-check')}`, 'warning');
+  } finally {
+    isCheckingHealth = false;
+  }
+}
+
 // --- Background Metadata Processor (BPM, Key, Mood & beat offset via Essentia.js) ---
 let isProcessingMetadata = false;
 
@@ -904,7 +1219,8 @@ function updateAnalysisProgress() {
       t.mood !== null &&
       t.beatOffset !== undefined &&
       t.beatOffset !== null &&
-      (t.loudness !== undefined && t.loudness !== null || t.replaygainTrackGain !== undefined && t.replaygainTrackGain !== null)
+      t.loudness !== undefined && t.loudness !== null &&
+      t.endingCold !== undefined
     )
   ).length;
   const remaining = total - completed;
@@ -936,7 +1252,9 @@ async function backgroundMetadataProcessor() {
       t.mood === null ||
       t.beatOffset === undefined ||
       t.beatOffset === null ||
-      ((t.loudness === undefined || t.loudness === null) && (t.replaygainTrackGain === undefined || t.replaygainTrackGain === null))
+      t.loudness === undefined ||
+      t.loudness === null ||
+      t.endingCold === undefined
     )
   );
   if (!track) return;
@@ -951,7 +1269,7 @@ async function backgroundMetadataProcessor() {
   let beatOffset = track.beatOffset;
 
   const needsAnalysis = (bpm === null || key === null || mood === undefined || mood === null || beatOffset === undefined || beatOffset === null ||
-    ((track.loudness === undefined || track.loudness === null) && (track.replaygainTrackGain === undefined || track.replaygainTrackGain === null)));
+    track.loudness === undefined || track.loudness === null || track.endingCold === undefined);
 
   if (needsAnalysis) {
     let essentiaSuccess = false;
@@ -962,6 +1280,11 @@ async function backgroundMetadataProcessor() {
       logConsole(`Analyzing "${track.title}" with Essentia.js audio analysis...`, 'info');
       try {
         const decoded = await decodeTrackToMono(track.path);
+
+        // Inspect the song's ending BEFORE the samples are transferred away:
+        // loud right up to the last second = "cold" ending (no fade-out).
+        track.endingCold = detectColdEnding(decoded.samples, decoded.sampleRate);
+
         const result = await sendWorkerRequest(
           'analyze',
           { samples: decoded.samples, sampleRate: decoded.sampleRate },
@@ -977,7 +1300,7 @@ async function backgroundMetadataProcessor() {
         essentiaSuccess = true;
         logConsole(`Essentia analyzed "${track.title}": BPM ${bpm}, Key ${key}, Mood ${mood} (beat offset ${beatOffset}s)`, 'ai');
       } catch (err) {
-        logConsole(`Essentia analysis failed for "${track.title}": ${err.message}. Falling back.`, 'warning');
+        logConsole(`Couldn't fully analyze "${track.title}": ${friendlyError(err, 'essentia-analysis')}`, 'warning');
         // Mark as undecodable so we don't get stuck on this file in the background processor
         if (err.message.includes('decoding failed') || err.message.includes('decode')) {
           track.undecodable = true;
@@ -1010,7 +1333,7 @@ async function backgroundMetadataProcessor() {
             bpm = audioAnalysis.bpm;
           }
         } catch (err) {
-          logConsole(`Transient analysis failed for "${track.title}": ${err.message}`, 'warning');
+          logConsole(`Beat detection didn't work for "${track.title}": ${friendlyError(err, 'transient-analysis')}`, 'warning');
           if (err.message.includes('decoding failed') || err.message.includes('decode')) {
             track.undecodable = true;
           }
@@ -1035,43 +1358,29 @@ async function backgroundMetadataProcessor() {
   track.key = key;
   track.mood = mood;
   track.beatOffset = beatOffset;
+
+  // If the ending couldn't be inspected (decode failed), assume a normal
+  // fade-out so the DJ keeps its default crossfade behavior.
+  if (track.endingCold === undefined) track.endingCold = false;
   
-  // 4. Background Album Art Fetching (if missing)
+  // 4. Background Album Art Fetching (if missing or corrupt)
   let artworkToEmbed = null;
-  if (!track.albumArt || track.albumArt.length < 500) {
+  if (!isAlbumArtValid(track.albumArt)) {
     try {
-      logConsole(`Fetching missing album art for "${track.title}" from MusicBrainz...`, 'info');
-      const artistClean = track.artist.replace(/feat\..*/i, '').replace(/ft\..*/i, '').trim();
-      const query = `artist:"${artistClean}" AND recording:"${track.title}"`;
-      const url = `https://musicbrainz.org/ws/2/recording/?query=${encodeURIComponent(query)}&fmt=json`;
-
-      const response = await fetch(url, { headers: { 'User-Agent': 'YourOwnPersonalDJ/1.0.0' } });
-      if (response.ok) {
-        const data = await response.json();
-        const recordings = data.recordings || [];
-        if (recordings.length > 0 && recordings[0].releases && recordings[0].releases.length > 0) {
-          const releaseId = recordings[0].releases[0].id;
-          const caaUrl = `https://coverartarchive.org/release/${releaseId}/front-250`;
-
-          // Fetch the actual image bytes (follows the archive.org redirect)
-          const imgResp = await fetch(caaUrl);
-          if (imgResp.ok) {
-            const blob = await imgResp.blob();
-            const dataUrl = await new Promise(resolve => {
-              const reader = new FileReader();
-              reader.onloadend = () => resolve(reader.result);
-              reader.readAsDataURL(blob);
-            });
-            if (dataUrl && dataUrl.length > 500) {
-              track.albumArt = dataUrl;  // store as base64 — no redirect needed for display
-              artworkToEmbed = dataUrl;
-              logConsole(`Found album art for "${track.title}" on MusicBrainz/CAA.`, 'success');
-            }
-          }
-        }
+      logConsole(`Fetching ${track.albumArt ? 'replacement' : 'missing'} album art for "${track.title}" from MusicBrainz...`, 'info');
+      track.albumArt = null; // drop corrupt data so the protocol fallback works meanwhile
+      const dataUrl = await fetchArtFromMusicBrainz(track);
+      if (dataUrl) {
+        track.albumArt = dataUrl;  // store as base64 — no redirect needed for display
+        artworkToEmbed = dataUrl;
+        delete track.artCheckedAt;
+        logConsole(`Found album art for "${track.title}" on MusicBrainz/CAA.`, 'success');
+      } else {
+        track.artCheckedAt = Date.now(); // nothing available — recheck in a week
       }
     } catch (err) {
       console.warn(`Art fetch failed for ${track.title}:`, err);
+      if (window.api.logDebug) window.api.logDebug(`[art-fetch] ${track.title}: ${err.message}`);
     }
   }
 
@@ -2202,22 +2511,23 @@ function sanitizeLibraryTrack(track) {
         cleaned = 'Industrial Electronic';
       }
 
+      // Collapse multi-genre tag dumps ("Rock;Pop;Dance/Electronic;...") to the
+      // first listed genre and cap runaway lengths (some files carry 128+ chars)
+      if (field === 'genre' && cleaned) {
+        const g = cleanGenre(cleaned);
+        cleaned = (g === 'Unknown') ? '' : g;
+      }
+
       track[field] = cleaned || textDefaults[field] ||
         (field === 'title' ? track.path.split('\\').pop().replace(/\.[^.]+$/, '') : '');
     }
   });
 
-  // Re-enable automatic protocol fetch for art by clearing broken base64 strings
-  if (track.albumArt && track.albumArt.startsWith('data:image/') && track.albumArt.length < 500) {
+  // albumArt: must be valid, decodable image data (or an https URL).
+  // Corrupt/stub art is cleared here so the background art repairer can
+  // re-fetch it from MusicBrainz.
+  if (track.albumArt != null && !isAlbumArtValid(track.albumArt)) {
     track.albumArt = null;
-  }
-
-  // albumArt: must be a data URL or an https URL — clear anything else
-  if (track.albumArt != null) {
-    const art = String(track.albumArt);
-    if (!art.startsWith('data:') && !art.startsWith('https://')) {
-      track.albumArt = null;
-    }
   }
 
   // ReplayGain: validate dB gain (−51 to +51) and linear peak (0 to 2)
