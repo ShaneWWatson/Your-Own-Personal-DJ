@@ -1108,7 +1108,7 @@ async function fetchArtFromMusicBrainz(track) {
   const query = `artist:"${artistClean}" AND recording:"${track.title}"`;
   const url = `https://musicbrainz.org/ws/2/recording/?query=${encodeURIComponent(query)}&fmt=json`;
 
-  const response = await fetch(url, { headers: { 'User-Agent': 'YourOwnPersonalDJ/1.0.0' } });
+  const response = await fetch(url, { headers: { 'User-Agent': 'YourOwnPersonalDJ/2.0.0' } });
   if (!response.ok) return null;
 
   const data = await response.json();
@@ -2763,7 +2763,7 @@ async function enrichMetadata(artist, title) {
     
     const response = await fetch(url, {
       headers: {
-        'User-Agent': 'YourOwnPersonalDJ/1.0.0 ( werisetech@gmail.com )'
+        'User-Agent': 'YourOwnPersonalDJ/2.0.0 ( werisetech@gmail.com )'
       }
     });
 
