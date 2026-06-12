@@ -168,6 +168,17 @@ function computeRms(samples) {
   return Math.sqrt(sumSq / (n || 1));
 }
 
+/**
+ * Run the full Essentia analysis chain on decoded mono PCM samples:
+ * RhythmExtractor2013 (BPM + beat positions), KeyExtractor (key + scale),
+ * RMS loudness, and a derived mood tag. WASM vectors are always freed in
+ * the finally block to prevent heap exhaustion.
+ * @param {Float32Array} samples - Mono PCM audio at `sampleRate`.
+ * @param {number} sampleRate - Sample rate of the provided audio.
+ * @returns {{bpm: number|null, key: string, mood: string,
+ *            beatOffset: number|null, confidence: number, rms: number}}
+ * @throws {Error} When the Essentia engine is not initialized.
+ */
 function analyze(samples, sampleRate) {
   if (engineStatus !== 'connected' || !essentia) {
     throw new Error('Essentia engine is not active');
@@ -199,7 +210,7 @@ function analyze(samples, sampleRate) {
         const period = 60 / (bpm || 100);
         beatOffset = parseFloat((ticks[0] % period).toFixed(3));
       }
-    } catch (e) {
+    } catch {
       // Leave bpm null; renderer will fall back to its own transient analysis.
       bpm = null;
     }
@@ -211,7 +222,7 @@ function analyze(samples, sampleRate) {
       const k = essentia.KeyExtractor(signal);
       key = formatKey(k.key, k.scale);
       scale = k.scale || 'major';
-    } catch (e) {
+    } catch {
       key = 'C Maj';
       scale = 'major';
     }
