@@ -2051,11 +2051,13 @@ function isArtistAllowed(artist) {
   });
   if (inQueue) return false;
 
-  // Block if played 2+ times in the last 20 minutes
+  // Block if the artist played at all within the rolling 20-minute window.
+  // (The old threshold of "2+ plays" let an artist return after only ~3
+  // songs: one play didn't trip the cooldown, and only the current-track
+  // and 3-slot queue checks stood in the way.)
   const twentyMin = 20 * 60 * 1000;
   const cutoff = Date.now() - twentyMin;
-  const recentCount = state.history.filter(h => getPrimaryArtist(h.artist) === primary && h.playedAt > cutoff).length;
-  return recentCount < 2;
+  return !state.history.some(h => getPrimaryArtist(h.artist) === primary && h.playedAt > cutoff);
 }
 
 function isSongAllowed(path) {
@@ -2317,15 +2319,20 @@ function getHeuristicScore(track, currentBpm, currentGenre, currentKey, referenc
     }
   }
 
-  // (b) Artist Repeat Penalty: penalize up to -100 points for artist plays within 20 minutes
+  // (b) Artist Repeat Penalty: heavily penalize artist plays within the same
+  // rolling 20 minutes (up to -250, decaying). This is the backstop for the
+  // fallback tiers that drop the hard isArtistAllowed check on small
+  // libraries — a repeat should be a last resort, not a 3-song cycle.
+  // Compare by primary artist so "X feat. Y" still counts as X.
   if (track.artist && track.artist !== 'Unknown Artist') {
-    const recentArtistPlays = state.history.filter(h => h.artist === track.artist);
+    const primary = getPrimaryArtist(track.artist);
+    const recentArtistPlays = state.history.filter(h => getPrimaryArtist(h.artist) === primary);
     if (recentArtistPlays.length > 0) {
       const lastPlayed = Math.max(...recentArtistPlays.map(h => h.playedAt));
       const timeSincePlayed = now - lastPlayed;
       const twentyMin = 20 * 60 * 1000;
       if (timeSincePlayed < twentyMin) {
-        const penalty = -100 * (1 - (timeSincePlayed / twentyMin));
+        const penalty = -250 * (1 - (timeSincePlayed / twentyMin));
         score += penalty;
       }
     }
