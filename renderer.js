@@ -992,10 +992,17 @@ function friendlyError(err, context) {
     // "Failed to fetch" during local analysis is the app-media:// file read failing,
     // not a network problem. Same if the OS reports we're online.
     const localContexts = ['essentia-analysis', 'transient-analysis', 'health-check'];
-    if (localContexts.includes(context) || navigator.onLine === true) {
+    if (localContexts.includes(context)) {
+      // For local analysis, "Failed to fetch" is the app-media:// file read
+      // failing — not a network problem.
       return 'This file could not be read for analysis — it may be locked, moved, or too large.';
     }
-    return 'No internet connection right now — online features will retry later.';
+    if (navigator.onLine === false) {
+      return 'No internet connection right now — online features will retry later.';
+    }
+    // Online, but a genuinely network-bound request (e.g. MusicBrainz art
+    // lookup) failed — the service is unreachable, busy, or rate-limiting.
+    return 'Couldn’t reach the online music database (it may be busy or rate-limiting) — will retry later.';
   }
   return 'Something unexpected went wrong with this song (technical details were saved to debug.log).';
 }
@@ -1108,7 +1115,10 @@ async function fetchArtFromMusicBrainz(track) {
   const query = `artist:"${artistClean}" AND recording:"${track.title}"`;
   const url = `https://musicbrainz.org/ws/2/recording/?query=${encodeURIComponent(query)}&fmt=json`;
 
-  const response = await fetch(url, { headers: { 'User-Agent': 'YourOwnPersonalDJ/2.0.0' } });
+  // No custom headers here: a User-Agent on a cross-origin fetch triggers a
+  // CORS preflight the MusicBrainz API rejects. The polite UA is injected at
+  // the session layer in main.js instead.
+  const response = await fetch(url);
   if (!response.ok) return null;
 
   const data = await response.json();
@@ -2768,11 +2778,9 @@ async function enrichMetadata(artist, title) {
     const query = `artist:"${artistClean}" AND recording:"${title}"`;
     const url = `https://musicbrainz.org/ws/2/recording/?query=${encodeURIComponent(query)}&fmt=json`;
     
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'YourOwnPersonalDJ/2.0.0 ( werisetech@gmail.com )'
-      }
-    });
+    // UA is injected at the session layer (main.js); setting it here would
+    // force a CORS preflight that MusicBrainz rejects.
+    const response = await fetch(url);
 
     if (!response.ok) throw new Error('MusicBrainz response was not ok');
 

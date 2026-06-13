@@ -14,7 +14,7 @@
  * option) any later version. See the LICENSE file for details.
  */
 
-const { app, BrowserWindow, ipcMain, dialog, protocol } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const url = require('url');
@@ -494,6 +494,24 @@ app.on('web-contents-created', (event, contents) => {
 
 // Register custom protocol for local media streaming
 app.whenReady().then(() => {
+  // MusicBrainz / Cover Art Archive require a descriptive User-Agent and will
+  // reject generic ones. We MUST set it at the network layer rather than as a
+  // fetch() header in the renderer: User-Agent is not a CORS-safelisted request
+  // header, so setting it in renderer fetch() forces a preflight OPTIONS that
+  // the MusicBrainz API doesn't satisfy — which surfaced as every art/metadata
+  // lookup failing with "Failed to fetch". Injecting it here keeps the requests
+  // simple (no preflight) while still identifying the app politely.
+  const MB_UA = `YourOwnPersonalDJ/${app.getVersion()} ( werisetech@gmail.com )`;
+  const UA_HOSTS = /(^|\.)(musicbrainz\.org|coverartarchive\.org|archive\.org)$/i;
+  session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
+    try {
+      if (UA_HOSTS.test(new URL(details.url).hostname)) {
+        details.requestHeaders['User-Agent'] = MB_UA;
+      }
+    } catch { /* non-HTTP URL (app-media:, etc.) — leave headers untouched */ }
+    callback({ requestHeaders: details.requestHeaders });
+  });
+
   protocol.handle('app-media', async (request) => {
     try {
       const parsedUrl = new URL(request.url);
