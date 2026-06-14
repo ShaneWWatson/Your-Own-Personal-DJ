@@ -85,21 +85,34 @@ The packaged product will be compiled under `dist/Your Own Personal DJ-win32-x64
 
 ```
 YourOwnPersonalDJ/
-├── .gitignore                  # Excludes dependencies and local packaging builds
-├── package.json                # App configurations, dependencies, and build scripts
+├── .gitignore                  # Excludes dependencies, debug logs, and packaging builds
+├── package.json                # App configurations, dependencies, and build/lint scripts
+├── eslint.config.mjs           # ESLint flat config (per-environment globals)
 ├── LICENSE                     # GNU Affero General Public License v3.0
 ├── NOTICE                      # Third-party attributions
 ├── LICENSES_chromium.html      # Detailed credits and licensing for used libraries
-├── main.js                     # Main process: app lifecycle, IPC channels, and DB management
-├── preload.js                  # IPC bridge: exposes secure file and ID3 APIs to frontend
+├── main.js                     # Main process: lifecycle, IPC, streaming protocol, file health/repair
+├── preload.js                  # IPC bridge: exposes the secure window.api surface to renderers
 ├── index.html                  # Main user interface markup
 ├── styles.css                  # Styling design system (vanilla CSS layout)
-├── renderer.js                 # Frontend logic: audio player, decode, analysis & heuristics
+├── renderer.js                 # UI logic: library, DJ selection engine, background processors
 ├── audio-analysis-worker.js    # Essentia.js worker: BPM, key, mood & beat-offset extraction
 ├── audio.html                  # Isolated audio playback engine window
-├── audio-renderer.js           # Crossfade / beatmatch playback engine
+├── audio-renderer.js           # Playback engine: normalization, crossfades, cold-ending handoffs
+├── debug.log                   # (Auto-generated at runtime) Troubleshooting log, rotates at 5 MB
 └── dist/                       # (Auto-generated on build) Standalone packaged build
 ```
+
+---
+
+## Development
+
+- **Linting**: The project uses ESLint (recommended rules, environment-aware config). Run it with:
+  ```bash
+  npm run lint
+  ```
+- **Security posture**: Renderer windows run with `contextIsolation`, `sandbox`, and `nodeIntegration: false`. All renderer↔main communication crosses an explicitly-enumerated `contextBridge` API. Windows cannot open popups or navigate away from app pages. Custom-protocol file access is restricted by an audio-extension allowlist outside the app directory.
+- **Documentation style**: Source files carry `@file` headers with license notices; significant functions are documented with JSDoc (`@param`/`@returns`).
 
 ---
 
