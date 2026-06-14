@@ -14,7 +14,7 @@
   },
   "devDependencies": {
     "@electron/packager": "^20.0.0",
-    "electron": "^42.2.0"
+    "electron": "^42.4.0"
   },
   "keywords": [
     "music",
