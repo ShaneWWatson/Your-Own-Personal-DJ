@@ -1638,6 +1638,9 @@ const MOOD_LYRIC_DESCRIPTIONS = {
   focus: 'steady and unobtrusive, suitable for deep concentration or studying — no jarring or distressing themes',
   energy: 'high energy, intense, driving, motivating — themes of power, speed, adrenaline, or determination',
   party: 'fun, celebratory, danceable, feel-good — themes of partying, dancing, friends, and good times',
+  // Uplifting is about lyrical content and overall feel, NOT tempo or loudness.
+  // A quiet hymn can be uplifting; a loud aggressive track is not.
+  uplifting: 'positive, hopeful, encouraging, inspiring — themes of hope, triumph, faith, gratitude, perseverance, love, or joy that leave the listener feeling lifted and reassured, regardless of how fast or loud the music is. Angry, bleak, despairing, or purely aggressive lyrics do NOT fit, even at high energy.',
 };
 
 /** Cache key prefix for the currently active mood (custom prompts get their own space). */
@@ -1873,7 +1876,10 @@ const SONIC_PROFILES = {
   CLASSIC_POP: {
     artists: ['the police', 'kansas', 'u2', 'r.e.m.', 'talking heads', 'dire straits', 'fleetwood mac', 'bryan duncan', 'vigilantes of love', 'blue oyster cult', 'b.o.c.', 'little richard', 'smalltown poets'],
     keywords: ['new wave', 'pop rock', 'classic rock', 'every breath', 'gold', 'heart', 'day'],
-    allowedMoods: ['uplifting', 'energy'],
+    // 'uplifting' is intentionally NOT here: it is a lyric/feel judgment, not a
+    // sonic-energy one (see doesTrackMatchMood's dedicated uplifting branch).
+    // Coupling it with 'energy' is what put aggressive rock next to gentle hymns.
+    allowedMoods: ['energy'],
     compatibility: ['STEADY_CCM', 'CLASSIC_POP', 'DRIVING_ALT']
   },
   DRIVING_ALT: {
@@ -1995,7 +2001,8 @@ function getSonicProfile(track) {
  * Decide whether a track fits the requested mood, using its Sonic DNA
  * profile plus BPM-based elasticity rules for adjacent styles.
  * @param {object} track - Library track.
- * @param {string} mood - Active mood ('chill'|'focus'|'energy'|'party'|'custom').
+ * @param {string} mood - Active mood
+ *   ('chill'|'focus'|'energy'|'party'|'uplifting'|'custom').
  * @returns {boolean}
  */
 function doesTrackMatchMood(track, mood) {
@@ -2015,6 +2022,19 @@ function doesTrackMatchMood(track, mood) {
 
   const profileKey = getSonicProfile(track);
   const profile = SONIC_PROFILES[profileKey];
+
+  // Uplifting is a lyric/feel mood, deliberately independent of the sonic
+  // energy path. The Lyric AI verdict is authoritative when available. Without
+  // it (no lyrics, AI off, or analysis pending) we fall back conservatively:
+  // only warm, non-aggressive profiles in a major key — we never *assume* loud
+  // or aggressive music is uplifting just because it's energetic.
+  if (sMood === 'uplifting') {
+    const lyricVerdict = getLyricVerdict(track);
+    if (lyricVerdict !== undefined) return lyricVerdict;
+    const UPLIFTING_FALLBACK_PROFILES = ['INTIMATE', 'STEADY_CCM', 'TRADITIONAL', 'CLASSIC_POP'];
+    if (!UPLIFTING_FALLBACK_PROFILES.includes(profileKey)) return false;
+    return !(track.key || '').toLowerCase().includes('min'); // major key only
+  }
 
   // Rule: Profile must explicitly allow the mood
   if (profile.allowedMoods.includes(sMood)) return true;
@@ -2262,6 +2282,8 @@ function getHeuristicScore(track, currentBpm, currentGenre, currentKey, referenc
       } else if (state.mood === 'focus' && (tMood.includes('study') || tMood.includes('concentration') || tMood.includes('steady') || tMood.includes('instrumental') || tMood.includes('minimal'))) {
         score += 150;
       } else if (state.mood === 'party' && (tMood.includes('dance') || tMood.includes('groove') || tMood.includes('funky') || tMood.includes('upbeat') || tMood.includes('club'))) {
+        score += 150;
+      } else if (state.mood === 'uplifting' && (tMood.includes('uplift') || tMood.includes('hopeful') || tMood.includes('triumph') || tMood.includes('worship') || tMood.includes('praise') || tMood.includes('inspir') || tMood.includes('joy'))) {
         score += 150;
       }
     }

@@ -98,8 +98,10 @@ function formatKey(key, scale) {
 
 /*
  * Derive a mood tag from grounded audio features. This keeps the vocabulary
- * aligned with the app's selectable moods (chill / focus / energy / party)
- * plus a few descriptive extras, so the existing heuristic scorer still works.
+ * aligned with the app's selectable moods (chill / focus / energy / party /
+ * uplifting) plus a few descriptive extras, so the heuristic scorer still works.
+ * Note: 'uplifting' is ultimately a lyric/feel judgment (see the Lyric Mood AI);
+ * the tag emitted here is only a provisional, soft sonic hint.
  */
 function deriveMood({ bpm, scale, rms }) {
   const isMinor = scale && scale.toLowerCase() === 'minor';
@@ -138,8 +140,9 @@ function deriveMood({ bpm, scale, rms }) {
     return 'focus';
   }
 
-  // Uplifting / Triumphant: Major, mid-tempo, pleasant energy
-  // Choral music and carols often fall here.
+  // Uplifting: a PROVISIONAL guess only. True "uplifting" depends on lyrics and
+  // overall feel (judged by the Lyric Mood AI), not sonics — so this tag is just
+  // a soft scoring hint for bright major-key mid-tempo songs, never a mood gate.
   if (!isMinor && bpm >= 100 && bpm <= 135 && midEnergy) {
     return 'uplifting';
   }
@@ -151,7 +154,9 @@ function deriveMood({ bpm, scale, rms }) {
     return isMinor ? 'energy' : 'party';
   }
 
-  return isMinor ? 'focus' : 'uplifting';
+  // Don't blanket-label leftover major-key tracks "uplifting" — that overstates
+  // a feel the audio can't confirm. 'focus' is the honest neutral default.
+  return 'focus';
 }
 
 /* Average loudness proxy (RMS) computed directly from samples. */
