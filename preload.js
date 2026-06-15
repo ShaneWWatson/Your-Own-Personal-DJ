@@ -1,3 +1,14 @@
+/**
+ * @file preload.js — Secure IPC bridge.
+ *
+ * Exposes a minimal, explicitly-enumerated `window.api` surface to the
+ * renderer processes via contextBridge. No Node.js primitives ever cross
+ * the bridge — only message-passing functions.
+ *
+ * @license AGPL-3.0-or-later
+ * @copyright 2026 Shane W Watson
+ */
+
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
@@ -12,6 +23,13 @@ contextBridge.exposeInMainWorld('api', {
   logDebug: (line) => ipcRenderer.send('debug-log', line),
   checkFileHealth: (filePath) => ipcRenderer.invoke('check-file-health', filePath),
   repairFile: (filePath) => ipcRenderer.invoke('repair-file', filePath),
+
+  // Lyric Mood AI (local model or Anthropic) — config/key stay in the main process
+  aiGetStatus: () => ipcRenderer.invoke('ai-get-status'),
+  aiSetConfig: (config) => ipcRenderer.invoke('ai-set-config', config),
+  aiAnalyzeLyrics: (payload) => ipcRenderer.invoke('ai-analyze-lyrics', payload),
+  onAiAnalyzeProgress: (callback) => ipcRenderer.on('ai-analyze-progress', (event, data) => callback(data)),
+  onAiModelDownloadProgress: (callback) => ipcRenderer.on('ai-model-download-progress', (event, data) => callback(data)),
   
   // Audio Process Communication Bridge
   sendToAudio: (data) => ipcRenderer.send('to-audio-player', data),

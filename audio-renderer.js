@@ -1,3 +1,15 @@
+/**
+ * @file audio-renderer.js — Isolated audio playback engine (hidden window).
+ *
+ * Owns the dual-deck <audio> element pair and the Web Audio gain graph:
+ * loudness normalization with a safety limiter, beatmatched crossfades,
+ * cold-ending handoffs, tempo ramping, and seek/volume/device commands
+ * received from the UI process over the IPC broker.
+ *
+ * @license AGPL-3.0-or-later
+ * @copyright 2026 Shane W Watson
+ */
+
 // DOM Elements
 const audioPlayerA = document.getElementById('audio-player-a');
 const audioPlayerB = document.getElementById('audio-player-b');
@@ -84,7 +96,11 @@ function computeNormalizationGain(track) {
     return Math.max(0.1, Math.min(5.0, factor));
 }
 
-// Helper to send events back to the main UI process
+/**
+ * Send a playback event to the UI process via the main-process broker.
+ * @param {string} event - Event name (e.g. 'timeupdate', 'crossfade-start').
+ * @param {object} [data={}] - Event payload.
+ */
 function sendEvent(event, data = {}) {
     window.api.sendFromAudio({ event, data });
 }
@@ -385,7 +401,13 @@ function startColdTransition(nextTrack) {
     coldTimeoutId = setTimeout(() => { if (coldFireFn) coldFireFn(); }, (remaining + 3) * 1000);
 }
 
-// DJ Smooth Transition / Crossfading & Playback
+/**
+ * DJ transition into the next track. Decides between a cold-ending handoff
+ * (abrupt recorded ending → play out, then drop the next song) and the
+ * beatmatched slow fade: tempo-matched playbackRate, beat-phase-aligned cue
+ * point, constant-power gain curves, then a 5s tempo ramp back to 1.0x.
+ * @param {object} nextTrack - Track to transition into (with bpm/beatOffset).
+ */
 function startCrossfade(nextTrack) {
     // The DJ's transition decision: songs with an abrupt recorded ending get a
     // cold handoff (play to the end, then drop the next track); songs with a
@@ -564,6 +586,13 @@ function startCrossfade(nextTrack) {
     });
 }
 
+/**
+ * Glide a player's playbackRate to a target over a duration (the "pitch
+ * fader slide" after a tempo-matched crossfade completes).
+ * @param {HTMLAudioElement} player - The deck to adjust.
+ * @param {number} targetRate - Final playback rate (normally 1.0).
+ * @param {number} durationMs - Ramp duration in milliseconds.
+ */
 function rampPlaybackRate(player, targetRate, durationMs) {
     const startRate = player.playbackRate;
     if (startRate === targetRate) return;

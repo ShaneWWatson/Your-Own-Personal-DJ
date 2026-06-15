@@ -5,7 +5,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self' app-media:; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://coverartarchive.org https://*.archive.org app-media:; connect-src 'self' https://musicbrainz.org https://coverartarchive.org https://*.archive.org;">
+    content="default-src 'self' app-media:; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://coverartarchive.org https://archive.org https://*.archive.org app-media:; connect-src 'self' https://musicbrainz.org https://coverartarchive.org https://archive.org https://*.archive.org;">
   <title>Your Own Personal DJ</title>
   <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -178,6 +178,11 @@
               <span class="mood-name">Party Vibes</span>
               <span class="mood-desc">Danceable, grooving beats & high tempo</span>
             </button>
+            <button class="mood-card" data-mood="uplifting">
+              <span class="mood-icon">🌅</span>
+              <span class="mood-name">Uplifting</span>
+              <span class="mood-desc">Hopeful, encouraging lyrics & warm feel</span>
+            </button>
             <button class="mood-card" data-mood="custom">
               <span class="mood-icon">🔮</span>
               <span class="mood-name">Custom Mood</span>
@@ -189,7 +194,7 @@
           <div id="custom-mood-container" class="custom-mood-container hidden">
             <div class="custom-input-wrapper">
               <input type="text" id="custom-mood-input"
-                placeholder="Describe the vibe... (e.g. 'coding at midnight on a rainy cyber cafe', 'peaceful acoustic morning')" />
+                placeholder="Describe the vibe... (e.g. 'coding at midnight on a rainy evening at a cyber cafe', 'peaceful acoustic morning')" />
               <button id="btn-apply-custom-mood" class="btn-secondary">Apply Vibe</button>
             </div>
           </div>
@@ -371,7 +376,7 @@
         <div
           style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 10px;">
           <span style="font-size: 0.85rem; color: var(--text-muted);">App Version</span>
-          <span style="font-size: 0.85rem; font-weight: 700; color: var(--secondary);">1.0.0</span>
+          <span style="font-size: 0.85rem; font-weight: 700; color: var(--secondary);">2.0.0</span>
         </div>
 
         <!-- Output Device Select -->
@@ -403,6 +408,58 @@
           <span id="model-status-badge" class="badge bpm-badge"
             style="font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; text-transform: uppercase;">Bundled</span>
         </div>
+
+        <!-- Lyric Mood AI -->
+        <div style="display: flex; flex-direction: column; gap: 8px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 14px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <label style="font-size: 0.85rem; color: var(--text-muted);">Lyric Mood AI</label>
+            <span id="lyric-ai-status-badge" class="badge bpm-badge"
+              style="font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; text-transform: uppercase;">Off</span>
+          </div>
+          <p style="font-size: 0.72rem; color: var(--text-muted); margin: 0;">
+            Songs with embedded lyrics are checked against your selected mood — especially custom vibes.
+            The local model is free and 100% private (one ~1&nbsp;GB download, then fully offline, no account).
+            Songs without lyrics use the normal sonic engine.
+          </p>
+          <select id="lyric-ai-provider-select"
+            style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.06); color: white; padding: 10px; border-radius: 8px; font-family: var(--font-sans); font-size: 0.85rem; outline: none; width: 100%;">
+            <option value="local">Local model — private &amp; free (Qwen 2.5, on this PC)</option>
+            <option value="anthropic">Claude API — strongest judgment (needs API key)</option>
+          </select>
+          <div id="anthropic-config-fields" style="display: flex; flex-direction: column; gap: 8px;">
+            <input type="password" id="anthropic-key-input" placeholder="Anthropic API key (sk-ant-...)"
+              autocomplete="off"
+              style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.06); color: white; padding: 10px; border-radius: 8px; font-family: var(--font-mono); font-size: 0.8rem; outline: none; width: 100%;">
+            <select id="anthropic-model-select"
+              style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.06); color: white; padding: 10px; border-radius: 8px; font-family: var(--font-sans); font-size: 0.85rem; outline: none; width: 100%;">
+              <option value="claude-opus-4-8">Claude Opus 4.8 (best judgment)</option>
+              <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (balanced)</option>
+              <option value="claude-haiku-4-5">Claude Haiku 4.5 (cheapest)</option>
+            </select>
+          </div>
+          <button id="btn-save-ai-config" class="btn-secondary" style="align-self: flex-end;">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Crisis Support Modal -->
+  <div id="crisis-modal" class="modal-overlay hidden">
+    <div class="modal-content crisis-content">
+      <h3 style="font-size: 1.15rem; font-weight: 700; margin-bottom: 4px;">Before we queue that up&hellip;</h3>
+      <p style="font-size: 0.9rem; line-height: 1.5;">
+        It sounds like this vibe might touch on suicide or self-harm. Your music is yours, and we'll
+        play what you asked for &mdash; but you matter more than any playlist.
+      </p>
+      <ul style="font-size: 0.9rem; line-height: 1.7; padding-left: 18px; margin: 6px 0;">
+        <li>If you're in immediate danger, <strong>call 911</strong>.</li>
+        <li>You can <strong>call or text 988</strong> &mdash; the Suicide &amp; Crisis Lifeline &mdash; any time, 24/7. Free and confidential.</li>
+        <li>Or text <strong>HOME</strong> to <strong>741741</strong> (Crisis Text Line).</li>
+      </ul>
+      <div class="crisis-actions">
+        <button id="btn-crisis-988" class="btn-secondary">Open 988lifeline.org</button>
+        <button id="btn-crisis-continue" class="btn-secondary">Continue with my music</button>
+        <button id="btn-crisis-cancel" class="btn-icon" style="font-size: 0.85rem; padding: 8px 12px;">Not right now</button>
       </div>
     </div>
   </div>
