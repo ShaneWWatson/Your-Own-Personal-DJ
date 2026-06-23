@@ -30,7 +30,7 @@
         <h4 id="popup-title">Notification</h4>
         <p id="popup-message">Scanning completed successfully.</p>
       </div>
-      <button id="btn-popup-close" class="btn-icon">
+      <button id="btn-popup-close" class="btn-icon" aria-label="Close notification" title="Close">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M18 6 6 18M6 6l12 12"></path>
         </svg>
@@ -41,8 +41,7 @@
   <div class="app-container">
     <!-- SIDEBAR -->
     <aside class="sidebar">
-      <div class="sidebar-header"
-        style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+      <div class="sidebar-header">
         <div class="logo">
           <svg viewBox="0 0 24 24" width="32" height="32" class="glowing-icon">
             <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none"></circle>
@@ -89,7 +88,7 @@
             <span id="scan-percentage" class="scan-percentage">0%</span>
           </div>
           <div class="progress-bar-bg">
-            <div id="scan-progress-bar" class="progress-bar-fill" style="width: 0%"></div>
+            <div id="scan-progress-bar" class="progress-bar-fill"></div>
           </div>
         </div>
 
@@ -100,7 +99,7 @@
             <span id="analysis-percentage" class="scan-percentage">0%</span>
           </div>
           <div class="progress-bar-bg">
-            <div id="analysis-progress-bar" class="progress-bar-fill" style="width: 0%"></div>
+            <div id="analysis-progress-bar" class="progress-bar-fill"></div>
           </div>
         </div>
       </section>
@@ -111,12 +110,12 @@
           <h3 class="section-title">Essentia Audio Engine</h3>
           <div id="ai-status-badge" class="ai-status-badge fallback">
             <span class="pulse-dot"></span>
-            <span id="ai-status-text">Checking AI...</span>
+            <span id="ai-status-text">Checking Audio Engine...</span>
           </div>
         </div>
         <div class="ai-info-panel">
           <span class="label">Model:</span>
-          <span id="ai-model-name" class="val">Loading local model...</span>
+          <span id="ai-model-name" class="val">Loading Essentia Audio Engine...</span>
         </div>
         <div id="ai-console" class="ai-console">
           <div class="console-line system">[System] Welcome to Your Own Personal DJ. Ready to load music files.</div>
@@ -231,7 +230,8 @@
               <div class="player-progress">
                 <span id="track-duration-current" class="time-label">0:00</span>
                 <div class="slider-container">
-                  <input type="range" id="progress-slider" min="0" max="100" value="0" class="slider">
+                  <input type="range" id="progress-slider" min="0" max="100" value="0" class="slider"
+                    aria-label="Playback progress">
                 </div>
                 <span id="track-duration-total" class="time-label">0:00</span>
               </div>
@@ -269,7 +269,8 @@
                       <path d="M11 5 6 9H2v6h4l5 4V5zm4 3a5 5 0 0 1 0 8m2.5-12a9 9 0 0 1 0 16"></path>
                     </svg>
                   </button>
-                  <input type="range" id="volume-slider" min="0" max="100" value="80" class="volume-slider">
+                  <input type="range" id="volume-slider" min="0" max="100" value="80" class="volume-slider"
+                    aria-label="Volume">
                 </div>
               </div>
 
@@ -291,7 +292,8 @@
               <div class="card-title-container">
                 <h3 class="card-title">Internet Metadata</h3>
                 <label class="toggle-switch">
-                  <input type="checkbox" id="toggle-enrichment" checked>
+                  <input type="checkbox" id="toggle-enrichment" checked aria-label="Toggle Internet Metadata Enrichment"
+                    title="Toggle Internet Metadata Enrichment">
                   <span class="slider-round"></span>
                 </label>
               </div>
@@ -357,8 +359,8 @@
   <!-- Settings Modal Overlay -->
   <div id="settings-modal" class="modal-overlay hidden">
     <div class="modal-content">
-      <div style="display: flex; justify-content: space-between; align-items: center;">
-        <h3 style="font-size: 1.2rem; font-weight: 700;">Settings</h3>
+      <div class="settings-header">
+        <h3 class="settings-title">Settings</h3>
         <button id="btn-settings-close" class="btn-icon" title="Close Settings">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M18 6 6 18M6 6l12 12"></path>
@@ -366,42 +368,34 @@
         </button>
       </div>
 
-      <div style="display: flex; flex-direction: column; gap: 14px;">
+      <div class="settings-body">
         <!-- App Version -->
-        <div
-          style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 10px;">
-          <span style="font-size: 0.85rem; color: var(--text-muted);">App Version</span>
-          <span style="font-size: 0.85rem; font-weight: 700; color: var(--secondary);">1.0.0</span>
+        <div class="settings-row settings-row-divider">
+          <span class="settings-label">App Version</span>
+          <span class="settings-value">2.2.0</span>
         </div>
 
         <!-- Output Device Select -->
-        <div style="display: flex; flex-direction: column; gap: 6px;">
-          <label for="select-output-device" style="font-size: 0.85rem; color: var(--text-muted);">Audio Output
-            Device</label>
-          <select id="select-output-device"
-            style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.06); color: white; padding: 10px; border-radius: 8px; font-family: var(--font-sans); font-size: 0.85rem; outline: none; width: 100%;">
+        <div class="settings-control-group">
+          <label for="select-output-device" class="settings-label">Audio Output Device</label>
+          <select id="select-output-device" class="settings-select">
             <option value="default">Default Device</option>
           </select>
         </div>
 
         <!-- Crossfade Duration Slider -->
-        <div style="display: flex; flex-direction: column; gap: 6px;">
-          <div style="display: flex; justify-content: space-between;">
-            <label for="crossfade-slider" style="font-size: 0.85rem; color: var(--text-muted);">Crossfade
-              Duration</label>
-            <span id="crossfade-value"
-              style="font-size: 0.85rem; font-family: var(--font-mono); color: var(--primary-hover);">10s</span>
+        <div class="settings-control-group">
+          <div class="settings-row">
+            <label for="crossfade-slider" class="settings-label">Crossfade Duration</label>
+            <span id="crossfade-value" class="settings-slider-value">10s</span>
           </div>
-          <input type="range" id="crossfade-slider" min="0" max="15" value="10"
-            style="width:100%; height:4px; border-radius:2px; background:rgba(255,255,255,0.1); -webkit-appearance:none; outline:none;">
+          <input type="range" id="crossfade-slider" min="0" max="15" value="10" class="settings-slider">
         </div>
 
         <!-- Audio Engine Status -->
-        <div
-          style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 14px; margin-top: 6px;">
-          <label style="font-size: 0.85rem; color: var(--text-muted);">Essentia Audio Engine (Bundled)</label>
-          <span id="model-status-badge" class="badge bpm-badge"
-            style="font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; text-transform: uppercase;">Bundled</span>
+        <div class="settings-row settings-row-top-divider">
+          <label class="settings-label">Essentia Audio Engine (Bundled)</label>
+          <span id="model-status-badge" class="badge bpm-badge settings-status-badge">Bundled</span>
         </div>
       </div>
     </div>
