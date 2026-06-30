@@ -78,3 +78,28 @@ The LLM-generated **DJ banter** ("spoken transition announcements") is gone. The
 heuristic engine still produces template transition reasons (tempo/key/genre based).
 If you want free-form banter back without re-introducing an AGPL-incompatible or
 license-heavy model, that's a separate, optional add-on.
+
+---
+
+## Later addition (v2.0): optional Lyric Mood AI
+
+This migration removed the LLM that *guessed BPM/key/mood from text*, and the
+points above stand: the **core BPM/key/mood analysis still requires no model
+download** and runs entirely through Essentia.js.
+
+v2.0 reintroduces a language model for a **different, narrow, and optional**
+purpose — judging whether a track's **embedded lyrics** fit the active mood (it
+never touches BPM/key analysis):
+
+- **Off by default.** Controlled by a main-screen toggle; the preference is
+  persisted. With it off, no model is loaded or downloaded.
+- **Two providers.** Local (`node-llama-cpp` running **Qwen2.5-1.5B-Instruct**,
+  a one-time ~1 GB download into the app-data `models/` folder) or the
+  **Anthropic API** with the user's own key. Both are MIT-licensed bindings/SDKs;
+  the Qwen model is Apache-2.0. None are AGPL, and the model is fetched on demand
+  rather than bundled, so the "no required model download" property is preserved.
+- **Genre vs. feeling routing.** Custom moods that name a *genre* (e.g. "trance")
+  are matched by Sonic Profile, not lyrics, so the model is skipped where it
+  wouldn't help.
+
+See `README.md` (Lyric Mood AI) and `NOTICE` for details and attributions.

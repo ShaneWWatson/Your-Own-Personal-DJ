@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-These are the versions being supported by securiity updates.
+These are the versions being supported by security updates.
 
 | Version | Supported          |
 | ------- | ------------------ |

@@ -15,10 +15,15 @@ Your Own Personal DJ is a premium desktop audio player built on Electron and the
   - **Tempo Matching**: Matches the tempo of the incoming song to the outgoing song by adjusting its playback speed (`playbackRate`) within a +/- 15% range.
   - **Phase Alignment**: Automatically computes the cue point of the incoming track to align its beats mathematically with the outgoing track's beat grid, preventing tempo clashing or "double beats."
   - **Tempo Drift Restoration**: Once the crossfade completes, the app gradually slides the playback rate back to the song's original speed (1.0x) over 5 seconds (simulating a DJ sliding a pitch fader).
-- **Heuristic DJ Selection Engine**: Picks the next track using a transparent, rule-based scoring engine that weighs mood, tempo proximity, harmonic key, and genre compatibility — with guardrails against jarring transitions (e.g. bridging between mild and heavy genres) and repeat-protection windows.
+- **Sonic DNA Selection Engine**: Picks the next track using a transparent, rule-based scoring engine that weighs mood, tempo proximity, harmonic key, and genre compatibility. Tracks are grouped into "Sonic Profiles" (from intimate acoustic, through classic and heavy rock, to dance/electronic) so transitions stay within compatible vibe tiers — with BPM-based elasticity for adjacent styles, artist/repeat cooldown windows, and guardrails against jarring mild↔heavy jumps.
+- **Built-in & Custom Moods**: Choose a built-in mood (chill, focus, energy, party, uplifting) or type any vibe you want. Genre-style prompts (e.g. "trance", "metal", "acoustic") are matched by *sound* through the Sonic Profiles, so a hard-rock track never sneaks into a trance set; feeling- or theme-style prompts (e.g. "rainy Sunday", "songs about heartbreak") are matched by their lyrical content when the Lyric Mood AI is enabled.
+- **Lyric Mood AI (optional, off by default)**: An optional layer that reads a track's embedded lyrics and judges whether they fit the active mood, refining selection beyond what tempo and key alone can reveal. It runs entirely on-device via a small local language model (a one-time ~1 GB download) or, if you prefer, through the Anthropic API with your own key. A toggle on the main screen turns it on or off; the choice is remembered between sessions, and while off no model is ever called.
 - **Vibrant Glassmorphic UI**: Includes a responsive, hardware-accelerated disc animation, simulated canvas visualizer, queue list, settings panel, and a live console outputting analysis diagnostics.
 - **Internet Metadata Enrichment**: Pulls releases, tags, genres, and release years asynchronously from the public **MusicBrainz API** for the currently playing track.
 - **File Health Scan & MP3 Repair**: Every file is inspected in the background for structural damage. MP3s with repairable damage (garbage bytes in the audio stream, corrupt tag blocks) are automatically rebuilt frame-by-frame — the original is always kept as a `.bak` backup next to the file. Other formats are flagged in the console so you know to re-rip or re-download them.
+- **Discord Rich Presence (optional)**: Show the track you're playing on your Discord profile, with album art and elapsed/remaining time. Uses your own Discord application through a dependency-free local IPC client and OAuth2; all credentials stay on your machine.
+- **Last.fm Scrobbling (optional)**: Scrobble your plays and update your "Now Playing" status on Last.fm, following the official thresholds (≥30 seconds and ≥50% of the track). Authenticated with your own Last.fm API account via the standard web-auth flow; the session key is stored locally.
+- **Crisis-Aware Custom Prompts**: A fully local guardrail scans custom mood prompts for language suggesting suicide or self-harm and, if detected, surfaces crisis-support resources before continuing. Nothing is ever sent anywhere — your request is still honored if you choose to proceed.
 
 ---
 
@@ -30,6 +35,9 @@ Your Own Personal DJ is designed to keep your project files clean and adhere to 
   - **Location**: `C:\Users\<username>\AppData\Local\YourOwnPersonalDJ\` (or `%LOCALAPPDATA%\YourOwnPersonalDJ\`). The app stores its track database, scanned folders, and play history in IndexedDB inside this directory.
   - **Why**: Windows applications should store cached data and user databases in the user's local AppData directory rather than the application bundle. This prevents workspace pollution, aligns with standard Windows folder permissions, and ensures your database persists even when updating, deleting, or rebuilding the program code.
   - **Legacy `library.md`**: Older versions stored the library as a Markdown file at the same location. On first launch, the app automatically migrates it into IndexedDB and renames it to `library.md.migrated`.
+- **Integration & AI Settings**:
+  - Configuration for the optional features lives as small JSON files in the same app-data directory: `ai-config.json` (Lyric Mood AI provider/model and, if used, your Anthropic API key), `discord-config.json`, and `lastfm-config.json`. If you enable the local Lyric Mood AI, its language model is stored once in a `models/` subfolder. These files stay on your machine and are never uploaded.
+  - The main-screen Lyric Mood AI on/off preference is remembered in the renderer's local storage, so it persists across sessions independently of the analysis database.
 - **Media Files**:
   - **Location**: Your music files stay exactly where they are on your system. The app uses a secure custom Electron streaming protocol (`app-media://`) to stream audio directly from your local folders without copying, duplicating, or uploading them anywhere.
 - **ID3 Metadata Writing**:
@@ -43,7 +51,8 @@ Your Own Personal DJ is designed to keep your project files clean and adhere to 
 ## Disk Space & Resource Footprint
 
 - **Packaged Standalone Executable**: ~**180 MB** (contains the packaged Electron container, Node.js runtime, and compiled native modules).
-- **Audio Analysis Engine**: Essentia.js ships **bundled** inside the application's `node_modules` (a few MB of WebAssembly). There is **no large model to download** at runtime and no network dependency for analysis.
+- **Audio Analysis Engine**: Essentia.js ships **bundled** inside the application's `node_modules` (a few MB of WebAssembly). The core BPM/key/mood analysis has **no large model to download** and no network dependency.
+- **Lyric Mood AI Model (optional)**: Only if you enable the Lyric Mood AI with the *local* provider, a small language model (a one-time ~1 GB download) is fetched into the app-data `models/` folder. With the feature off (the default), or when using the Anthropic provider instead, nothing is downloaded.
 - **Database (IndexedDB)**: Typically a few MB (scales with the size of your music catalog and embedded album art; holds paths, titles, genres, BPM, key, mood, beat offsets, and play history).
 - **Hardware Resources**:
   - **CPU**: Audio analysis runs in a background Web Worker so the UI stays responsive. Analysis is capped to the first ~90 seconds of each track to bound CPU time.

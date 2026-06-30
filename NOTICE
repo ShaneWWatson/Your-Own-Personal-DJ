@@ -30,5 +30,24 @@ This software includes or depends on the following open-source projects:
   License: BSD 2-Clause "Simplified" License (https://opensource.org/licenses/BSD-2-Clause)
   Project: https://github.com/electron/electron-packager
 
+- node-llama-cpp
+  License: MIT License (https://opensource.org/licenses/MIT)
+  Project: https://github.com/withcatai/node-llama-cpp
+  Notice: Provides the optional on-device Lyric Mood AI (llama.cpp bindings).
+  Used only when the feature is enabled with the local provider.
+
+- @anthropic-ai/sdk
+  License: MIT License (https://opensource.org/licenses/MIT)
+  Project: https://github.com/anthropics/anthropic-sdk-typescript
+  Notice: Optional cloud provider for the Lyric Mood AI. Used only when the
+  feature is enabled with the Anthropic provider and your own API key.
+
+- Qwen2.5-1.5B-Instruct (language model, downloaded at the user's option)
+  License: Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0)
+  Project: https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct
+  Notice: The local Lyric Mood AI model. Not bundled with the application; it is
+  fetched on demand only if you enable the local provider, and is governed by
+  its own license.
+
 For the full dependency tree and licenses, including Chromium components, please
 refer to the accompanying LICENSES.chromium.html file.
