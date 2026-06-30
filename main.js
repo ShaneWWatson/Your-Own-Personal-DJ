@@ -13,6 +13,7 @@
  * the Free Software Foundation, either version 3 of the License, or (at your
  * option) any later version. See the LICENSE file for details.
  */
+/* global fetch */
 
 const { app, BrowserWindow, ipcMain, dialog, protocol, session } = require('electron');
 const path = require('path');
@@ -22,6 +23,10 @@ const musicMetadata = require('music-metadata');
 const NodeID3 = require('node-id3');
 const { Readable } = require('stream');
 const Anthropic = require('@anthropic-ai/sdk');
+const DiscordIPCClient = require('./discord-rpc');
+const lastfm = require('./lastfm');
+const http = require('http');
+const { URLSearchParams } = require('url');
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -125,6 +130,298 @@ function saveAiConfig() {
     apiKey: aiConfig.apiKey,
     model: aiConfig.model,
   }), 'utf8');
+}
+
+// --- Discord Integration ----------------------------------------------------
+const DISCORD_CONFIG_PATH = path.join(dbDir, 'discord-config.json');
+
+let discordConfig = {
+  enabled: false,
+  clientId: '',
+  clientSecret: '',
+  accessToken: '',
+  refreshToken: '',
+  expiresAt: 0,
+  username: ''
+};
+
+try {
+  if (fs.existsSync(DISCORD_CONFIG_PATH)) {
+    const raw = JSON.parse(fs.readFileSync(DISCORD_CONFIG_PATH, 'utf8'));
+    if (raw) {
+      if (typeof raw.enabled === 'boolean') discordConfig.enabled = raw.enabled;
+      if (typeof raw.clientId === 'string') discordConfig.clientId = raw.clientId;
+      if (typeof raw.clientSecret === 'string') discordConfig.clientSecret = raw.clientSecret;
+      if (typeof raw.accessToken === 'string') discordConfig.accessToken = raw.accessToken;
+      if (typeof raw.refreshToken === 'string') discordConfig.refreshToken = raw.refreshToken;
+      if (typeof raw.expiresAt === 'number') discordConfig.expiresAt = raw.expiresAt;
+      if (typeof raw.username === 'string') discordConfig.username = raw.username;
+    }
+  }
+} catch (err) {
+  writeDebugLog(`[discord-config-load-error] ${err.message}`);
+}
+
+function saveDiscordConfig() {
+  try {
+    fs.writeFileSync(DISCORD_CONFIG_PATH, JSON.stringify(discordConfig, null, 2), 'utf8');
+  } catch (err) {
+    writeDebugLog(`[discord-config-save-error] ${err.message}`);
+  }
+}
+
+const discordClient = new DiscordIPCClient({
+  logger: (line) => writeDebugLog(line)
+});
+
+async function refreshDiscordToken() {
+  const params = new URLSearchParams({
+    client_id: discordConfig.clientId,
+    client_secret: discordConfig.clientSecret,
+    grant_type: 'refresh_token',
+    refresh_token: discordConfig.refreshToken
+  });
+
+  const response = await fetch('https://discord.com/api/oauth2/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params.toString()
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Token refresh failed: ${response.statusText} (${errText})`);
+  }
+
+  const tokenData = await response.json();
+  discordConfig.accessToken = tokenData.access_token;
+  discordConfig.refreshToken = tokenData.refresh_token;
+  discordConfig.expiresAt = Date.now() + (tokenData.expires_in * 1000);
+  saveDiscordConfig();
+  writeDebugLog('[discord] Token refreshed successfully');
+}
+
+async function connectDiscordRPC() {
+  if (!discordConfig.enabled || !discordConfig.clientId) {
+    discordClient.disconnect();
+    return;
+  }
+
+  // If token is expired and we have a refresh token, refresh it!
+  if (discordConfig.clientSecret && discordConfig.refreshToken && discordConfig.expiresAt && Date.now() > discordConfig.expiresAt - 60000) {
+    writeDebugLog('[discord] Access token expired or expiring soon. Refreshing...');
+    try {
+      await refreshDiscordToken();
+    } catch (err) {
+      writeDebugLog(`[discord] Failed to refresh token: ${err.message}`);
+    }
+  }
+
+  try {
+    const token = discordConfig.clientSecret ? discordConfig.accessToken : null;
+    await discordClient.connect(discordConfig.clientId, token);
+    writeDebugLog('[discord] Rich Presence client connected successfully');
+    
+    // If connected and song is already playing, push it
+    if (currentDiscordTrack) {
+      updateDiscordActivity();
+    }
+  } catch (err) {
+    writeDebugLog(`[discord] Failed to connect: ${err.message}`);
+  }
+}
+
+let currentDiscordTrack = null;
+let discordTrackStartTime = null;
+
+function handleAudioEventForDiscord(data) {
+  const { event, data: payload } = data;
+
+  if (!discordConfig.enabled) {
+    return;
+  }
+
+  switch (event) {
+    case 'crossfade-start': {
+      const track = payload.track;
+      if (!track) return;
+      currentDiscordTrack = track;
+      discordTrackStartTime = Date.now();
+      if (!discordClient.connected) {
+        connectDiscordRPC().catch(() => {});
+      } else {
+        updateDiscordActivity();
+      }
+      break;
+    }
+
+    case 'play':
+      if (currentDiscordTrack) {
+        if (!discordClient.connected) {
+          connectDiscordRPC().catch(() => {});
+        } else {
+          updateDiscordActivity();
+        }
+      }
+      break;
+
+    case 'pause':
+      if (currentDiscordTrack && discordClient.connected) {
+        const activity = {
+          details: `Paused: ${currentDiscordTrack.title.slice(0, 100)}`,
+          state: `by ${currentDiscordTrack.artist.slice(0, 100)}`,
+          assets: {
+            large_image: (currentDiscordTrack.albumArt && currentDiscordTrack.albumArt.startsWith('http'))
+              ? currentDiscordTrack.albumArt
+              : 'https://raw.githubusercontent.com/ShaneWWatson/Your-Own-Personal-DJ/main/icon.png',
+            large_text: currentDiscordTrack.album ? currentDiscordTrack.album.slice(0, 100) : 'Your Own Personal DJ'
+          }
+        };
+        discordClient.setActivity(activity);
+      }
+      break;
+
+    case 'ended':
+      currentDiscordTrack = null;
+      if (discordClient.connected) {
+        discordClient.setActivity(null);
+      }
+      break;
+  }
+}
+
+function updateDiscordActivity() {
+  if (!currentDiscordTrack || !discordClient.connected) return;
+
+  const durationMs = (currentDiscordTrack.duration || 0) * 1000;
+  const activity = {
+    details: currentDiscordTrack.title.slice(0, 100),
+    state: `by ${currentDiscordTrack.artist.slice(0, 100)}`,
+    timestamps: {
+      start: discordTrackStartTime,
+      end: discordTrackStartTime + durationMs
+    },
+    assets: {
+      large_image: (currentDiscordTrack.albumArt && currentDiscordTrack.albumArt.startsWith('http'))
+        ? currentDiscordTrack.albumArt
+        : 'https://raw.githubusercontent.com/ShaneWWatson/Your-Own-Personal-DJ/main/icon.png',
+      large_text: currentDiscordTrack.album ? currentDiscordTrack.album.slice(0, 100) : 'Your Own Personal DJ'
+    }
+  };
+
+  discordClient.setActivity(activity);
+}
+
+// --- Last.fm Scrobbling -----------------------------------------------------
+const LASTFM_CONFIG_PATH = path.join(dbDir, 'lastfm-config.json');
+
+let lastfmConfig = {
+  enabled: false,
+  apiKey: '',
+  apiSecret: '',
+  sessionKey: '',
+  username: ''
+};
+
+try {
+  if (fs.existsSync(LASTFM_CONFIG_PATH)) {
+    const raw = JSON.parse(fs.readFileSync(LASTFM_CONFIG_PATH, 'utf8'));
+    if (raw) {
+      if (typeof raw.enabled === 'boolean') lastfmConfig.enabled = raw.enabled;
+      if (typeof raw.apiKey === 'string') lastfmConfig.apiKey = raw.apiKey;
+      if (typeof raw.apiSecret === 'string') lastfmConfig.apiSecret = raw.apiSecret;
+      if (typeof raw.sessionKey === 'string') lastfmConfig.sessionKey = raw.sessionKey;
+      if (typeof raw.username === 'string') lastfmConfig.username = raw.username;
+    }
+  }
+} catch (err) {
+  writeDebugLog(`[lastfm-config-load-error] ${err.message}`);
+}
+
+function saveLastfmConfig() {
+  try {
+    fs.writeFileSync(LASTFM_CONFIG_PATH, JSON.stringify(lastfmConfig, null, 2), 'utf8');
+  } catch (err) {
+    writeDebugLog(`[lastfm-config-save-error] ${err.message}`);
+  }
+}
+
+// Tracks state for scrobble threshold calculation
+let lfmCurrentTrack = null;
+let lfmTrackStartTimeSec = 0;    // UNIX seconds when track started playing
+let lfmPlayedSec = 0;            // Accumulated play time (excludes pause time)
+let lfmLastPlayTimestamp = null; // Date.now() of last 'play' event (null if paused)
+
+function lfmResetTrack(track) {
+  lfmCurrentTrack = track;
+  lfmTrackStartTimeSec = Math.floor(Date.now() / 1000);
+  lfmPlayedSec = 0;
+  lfmLastPlayTimestamp = Date.now();
+}
+
+function lfmAccumulatePlayTime() {
+  if (lfmLastPlayTimestamp !== null) {
+    const elapsed = (Date.now() - lfmLastPlayTimestamp) / 1000;
+    lfmPlayedSec += elapsed;
+    lfmLastPlayTimestamp = null;
+  }
+}
+
+async function lfmScrobbleCurrent() {
+  if (!lfmCurrentTrack || !lastfmConfig.enabled || !lastfmConfig.sessionKey) return;
+  lfmAccumulatePlayTime();
+  try {
+    const result = await lastfm.scrobble(lfmCurrentTrack, lfmTrackStartTimeSec, lfmPlayedSec, lastfmConfig);
+    if (result.scrobbled) {
+      writeDebugLog(`[lastfm] Scrobbled: ${lfmCurrentTrack.artist} — ${lfmCurrentTrack.title}`);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('audio-player-event', {
+          event: 'log',
+          data: { message: `Last.fm: scrobbled "${lfmCurrentTrack.title}" by ${lfmCurrentTrack.artist}.`, type: 'info' }
+        });
+      }
+    } else {
+      writeDebugLog(`[lastfm] Scrobble skipped: ${result.reason}`);
+    }
+  } catch (err) {
+    writeDebugLog(`[lastfm] Scrobble error: ${err.message}`);
+  }
+}
+
+function handleAudioEventForLastfm(data) {
+  const { event, data: payload } = data;
+
+  if (!lastfmConfig.enabled || !lastfmConfig.sessionKey) return;
+
+  switch (event) {
+    case 'crossfade-start': {
+      const track = payload.track;
+      if (!track) return;
+      // Scrobble the outgoing track before switching
+      lfmScrobbleCurrent().catch(err => writeDebugLog(`[lastfm] ${err.message}`));
+      // Set up the new track
+      lfmResetTrack(track);
+      // Send Now Playing
+      lastfm.updateNowPlaying(track, lastfmConfig).catch(err => writeDebugLog(`[lastfm] nowPlaying error: ${err.message}`));
+      break;
+    }
+
+    case 'play':
+      // Resume accumulation
+      if (lfmLastPlayTimestamp === null) {
+        lfmLastPlayTimestamp = Date.now();
+      }
+      break;
+
+    case 'pause':
+      lfmAccumulatePlayTime();
+      break;
+
+    case 'ended':
+      lfmScrobbleCurrent().catch(err => writeDebugLog(`[lastfm] ${err.message}`));
+      lfmCurrentTrack = null;
+      break;
+  }
 }
 
 let anthropicClient = null;
@@ -680,6 +977,7 @@ app.whenReady().then(() => {
 
   createWindow();
   createAudioWindow();
+  connectDiscordRPC().catch(err => writeDebugLog(`[discord-init-error] ${err.message}`));
 
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -694,6 +992,7 @@ app.on('window-all-closed', function () {
 });
 
 app.on('will-quit', function () {
+  discordClient.disconnect();
   app.exit(0);
 });
 
@@ -717,6 +1016,8 @@ ipcMain.on('from-audio-player', (event, data) => {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('audio-player-event', data);
   }
+  handleAudioEventForDiscord(data);
+  handleAudioEventForLastfm(data);
 });
 
 // Safe External Link Launcher
@@ -1513,3 +1814,312 @@ ipcMain.handle('load-library', async () => {
 // NOTE: The legacy Gemma model-download / status IPC handlers were removed when
 // the app migrated from the Gemma LLM to Essentia.js. Essentia's WebAssembly
 // ships bundled inside node_modules, so there is no model to fetch at runtime.
+
+// --- Discord Integration IPC Handlers ---
+
+ipcMain.handle('discord-get-status', () => {
+  return {
+    enabled: discordConfig.enabled,
+    clientId: discordConfig.clientId,
+    clientSecret: discordConfig.clientSecret ? '••••••••' : '',
+    username: discordConfig.username,
+    connected: discordClient.connected
+  };
+});
+
+ipcMain.handle('discord-set-config', async (event, config) => {
+  if (typeof config.enabled === 'boolean') {
+    discordConfig.enabled = config.enabled;
+  }
+  if (typeof config.clientId === 'string') {
+    discordConfig.clientId = config.clientId;
+  }
+  if (typeof config.clientSecret === 'string') {
+    if (config.clientSecret !== '••••••••' && config.clientSecret !== '') {
+      discordConfig.clientSecret = config.clientSecret;
+    }
+  }
+  saveDiscordConfig();
+
+  if (discordConfig.enabled) {
+    await connectDiscordRPC();
+  } else {
+    discordClient.disconnect();
+  }
+
+  return {
+    ok: true,
+    enabled: discordConfig.enabled,
+    clientId: discordConfig.clientId,
+    clientSecret: discordConfig.clientSecret ? '••••••••' : '',
+    username: discordConfig.username,
+    connected: discordClient.connected
+  };
+});
+
+ipcMain.handle('discord-disconnect', async () => {
+  discordConfig.accessToken = '';
+  discordConfig.refreshToken = '';
+  discordConfig.expiresAt = 0;
+  discordConfig.username = '';
+  saveDiscordConfig();
+  discordClient.disconnect();
+  return { ok: true };
+});
+
+ipcMain.handle('discord-authorize', async (event, config) => {
+  discordConfig.clientId = config.clientId;
+  if (config.clientSecret && config.clientSecret !== '••••••••') {
+    discordConfig.clientSecret = config.clientSecret;
+  }
+  if (typeof config.enabled === 'boolean') {
+    discordConfig.enabled = config.enabled;
+  }
+  saveDiscordConfig();
+
+  if (!discordConfig.clientId || !discordConfig.clientSecret) {
+    return { ok: false, error: 'Client ID and Client Secret are required for OAuth.' };
+  }
+
+  return new Promise((resolve) => {
+    const PORT = 50124;
+    let server;
+
+    const cleanupServer = () => {
+      if (server) {
+        server.close();
+        server = null;
+      }
+    };
+
+    server = http.createServer(async (req, res) => {
+      try {
+        const reqUrl = new URL(req.url, `http://${req.headers.host}`);
+        
+        if (reqUrl.pathname === '/callback') {
+          const code = reqUrl.searchParams.get('code');
+          const error = reqUrl.searchParams.get('error');
+
+          if (error) {
+            res.writeHead(400, { 'Content-Type': 'text/html' });
+            res.end('<h1>Authentication Failed</h1><p>Error: ' + error + '</p>');
+            cleanupServer();
+            resolve({ ok: false, error: error });
+            return;
+          }
+
+          if (code) {
+            // Exchange code for token
+            const tokenParams = new URLSearchParams({
+              client_id: discordConfig.clientId,
+              client_secret: discordConfig.clientSecret,
+              grant_type: 'authorization_code',
+              code: code,
+              redirect_uri: `http://localhost:${PORT}/callback`
+            });
+
+            const tokenResponse = await fetch('https://discord.com/api/oauth2/token', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: tokenParams.toString()
+            });
+
+            if (!tokenResponse.ok) {
+              const errText = await tokenResponse.text();
+              throw new Error(`Token exchange failed: ${tokenResponse.statusText} (${errText})`);
+            }
+
+            const tokenData = await tokenResponse.json();
+            discordConfig.accessToken = tokenData.access_token;
+            discordConfig.refreshToken = tokenData.refresh_token;
+            discordConfig.expiresAt = Date.now() + (tokenData.expires_in * 1000);
+
+            // Fetch user profile to get username
+            const userResponse = await fetch('https://discord.com/api/users/@me', {
+              headers: { Authorization: `Bearer ${discordConfig.accessToken}` }
+            });
+
+            if (userResponse.ok) {
+              const userData = await userResponse.json();
+              discordConfig.username = `${userData.username}`;
+              if (userData.discriminator && userData.discriminator !== '0') {
+                discordConfig.username += `#${userData.discriminator}`;
+              }
+            }
+
+            saveDiscordConfig();
+
+            res.writeHead(200, { 'Content-Type': 'text/html' });
+            res.end(`
+              <html>
+                <body style="font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #0f172a; color: white;">
+                  <h1 style="color: #10b981;">Successfully Connected!</h1>
+                  <p>You have linked Your Own Personal DJ with Discord. You can close this window now.</p>
+                </body>
+              </html>
+            `);
+
+            cleanupServer();
+
+            // Connect RPC after token is obtained
+            await connectDiscordRPC();
+
+            resolve({
+              ok: true,
+              username: discordConfig.username,
+              connected: discordClient.connected
+            });
+          } else {
+            res.writeHead(400, { 'Content-Type': 'text/html' });
+            res.end('<h1>Bad Request</h1><p>Missing authorization code.</p>');
+            cleanupServer();
+            resolve({ ok: false, error: 'Missing code parameter' });
+          }
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'text/html' });
+        res.end('<h1>Authentication Error</h1><p>' + err.message + '</p>');
+        cleanupServer();
+        resolve({ ok: false, error: err.message });
+      }
+    });
+
+    server.on('error', (err) => {
+      writeDebugLog(`[discord-oauth-server-error] ${err.message}`);
+      resolve({ ok: false, error: `Failed to start redirect server on port ${PORT}: ${err.message}` });
+    });
+
+    server.listen(PORT, () => {
+      writeDebugLog(`[discord] OAuth callback server listening on port ${PORT}`);
+      // Open browser for authentication
+      const scopes = encodeURIComponent('identify rpc rpc.activities.write');
+      const redirectUri = encodeURIComponent(`http://localhost:${PORT}/callback`);
+      const authUrl = `https://discord.com/api/oauth2/authorize?client_id=${discordConfig.clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scopes}`;
+      
+      require('electron').shell.openExternal(authUrl);
+    });
+  });
+});
+
+// --- Last.fm IPC Handlers ---
+
+ipcMain.handle('lastfm-get-status', () => {
+  return {
+    enabled: lastfmConfig.enabled,
+    apiKey: lastfmConfig.apiKey,
+    apiSecret: lastfmConfig.apiSecret ? '••••••••' : '',
+    sessionKey: lastfmConfig.sessionKey ? '••••••••' : '',
+    username: lastfmConfig.username
+  };
+});
+
+ipcMain.handle('lastfm-set-config', async (event, config) => {
+  if (typeof config.enabled === 'boolean') lastfmConfig.enabled = config.enabled;
+  if (typeof config.apiKey === 'string') lastfmConfig.apiKey = config.apiKey.trim();
+  if (typeof config.apiSecret === 'string' && config.apiSecret !== '••••••••') {
+    lastfmConfig.apiSecret = config.apiSecret.trim();
+  }
+  saveLastfmConfig();
+  return {
+    ok: true,
+    enabled: lastfmConfig.enabled,
+    apiKey: lastfmConfig.apiKey,
+    apiSecret: lastfmConfig.apiSecret ? '••••••••' : '',
+    sessionKey: lastfmConfig.sessionKey ? '••••••••' : '',
+    username: lastfmConfig.username
+  };
+});
+
+ipcMain.handle('lastfm-disconnect', () => {
+  lastfmConfig.sessionKey = '';
+  lastfmConfig.username = '';
+  saveLastfmConfig();
+  return { ok: true };
+});
+
+ipcMain.handle('lastfm-authorize', async (event, config) => {
+  if (typeof config.apiKey === 'string') lastfmConfig.apiKey = config.apiKey.trim();
+  if (typeof config.apiSecret === 'string' && config.apiSecret !== '••••••••') {
+    lastfmConfig.apiSecret = config.apiSecret.trim();
+  }
+  if (typeof config.enabled === 'boolean') lastfmConfig.enabled = config.enabled;
+  saveLastfmConfig();
+
+  if (!lastfmConfig.apiKey || !lastfmConfig.apiSecret) {
+    return { ok: false, error: 'API Key and API Secret are both required.' };
+  }
+
+  return new Promise((resolve) => {
+    const PORT = 50125;
+    let server;
+
+    const cleanupServer = () => {
+      if (server) { server.close(); server = null; }
+    };
+
+    server = http.createServer(async (req, res) => {
+      try {
+        const reqUrl = new URL(req.url, `http://${req.headers.host}`);
+
+        if (reqUrl.pathname === '/callback') {
+          const token = reqUrl.searchParams.get('token');
+          const error = reqUrl.searchParams.get('error');
+
+          if (error || !token) {
+            res.writeHead(400, { 'Content-Type': 'text/html' });
+            res.end('<h1>Authentication Failed</h1><p>Error: ' + (error || 'Missing token') + '</p>');
+            cleanupServer();
+            resolve({ ok: false, error: error || 'Missing token' });
+            return;
+          }
+
+          // Exchange token for session key
+          const sessionData = await lastfm.apiCall({
+            method: 'auth.getSession',
+            api_key: lastfmConfig.apiKey,
+            token
+          }, lastfmConfig.apiSecret);
+
+          lastfmConfig.sessionKey = sessionData.session.key;
+          lastfmConfig.username = sessionData.session.name;
+          saveLastfmConfig();
+
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end(`
+            <html>
+              <body style="font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #0f172a; color: white;">
+                <h1 style="color: #e23b3b;">&#9835; Last.fm Connected!</h1>
+                <p>Scrobbling is now active for <strong>${lastfmConfig.username}</strong>. You can close this window.</p>
+              </body>
+            </html>
+          `);
+
+          cleanupServer();
+          resolve({ ok: true, username: lastfmConfig.username });
+        } else {
+          res.writeHead(404); res.end();
+        }
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'text/html' });
+        res.end('<h1>Error</h1><p>' + err.message + '</p>');
+        cleanupServer();
+        resolve({ ok: false, error: err.message });
+      }
+    });
+
+    server.on('error', (err) => {
+      writeDebugLog(`[lastfm-auth-server-error] ${err.message}`);
+      resolve({ ok: false, error: `Failed to start redirect server on port ${PORT}: ${err.message}` });
+    });
+
+    server.listen(PORT, () => {
+      writeDebugLog(`[lastfm] OAuth callback server listening on port ${PORT}`);
+      const callbackUrl = encodeURIComponent(`http://localhost:${PORT}/callback`);
+      const authUrl = `https://www.last.fm/api/auth/?api_key=${lastfmConfig.apiKey}&cb=${callbackUrl}`;
+      require('electron').shell.openExternal(authUrl);
+    });
+  });
+});

@@ -33,6 +33,12 @@ let state = {
   mood: 'chill', // default
   customMoodPrompt: '',
 
+  // Lyric Mood AI master switch (mirrors the on-screen toggle, persisted to
+  // localStorage). Defaults OFF — picks come from Sonic DNA / BPM / key alone
+  // until the user opts in. When false, the lyric model is never called and any
+  // cached verdicts are ignored.
+  lyricAiEnabled: false,
+
   // Lyric Mood AI: "<moodKey>::<path>" → true/false (does the lyric fit?).
   // In-memory only; rebuilt on demand per mood. moodKey is the mood name, or
   // "custom::<prompt>" for custom vibes, so verdicts never leak across moods.
@@ -548,6 +554,9 @@ window.addEventListener('load', async () => {
 
   // Set up Lyric Mood AI settings + crisis support modal
   setUpAiSettings();
+  setUpLyricAiToggle();
+  setUpDiscordSettings();
+  setUpLastfmSettings();
   setUpCrisisModal();
 
   // Set up audio player triggers (UI side)
@@ -1656,6 +1665,7 @@ function lyricMoodDescription() {
 
 /** @returns {boolean|undefined} true/false when Claude has judged this track for the active mood. */
 function getLyricVerdict(track) {
+  if (!state.lyricAiEnabled) return undefined; // master switch off → no lyric influence
   return state.lyricVerdicts.get(`${lyricMoodKey()}::${track.path}`);
 }
 
@@ -1684,13 +1694,61 @@ function updateAiSettingsUI() {
   }
 }
 
+// --- Lyric Mood AI on/off toggle (main screen, under the engine console) ---
+const LYRIC_AI_PREF_KEY = 'yopdj.lyricAiEnabled';
+
+function updateLyricAiToggleHint() {
+  const hint = document.getElementById('lyric-ai-toggle-hint');
+  if (!hint) return;
+  hint.innerText = state.lyricAiEnabled
+    ? 'Judging lyrics to refine mood picks'
+    : 'Off — matching by sound only';
+}
+
+function setUpLyricAiToggle() {
+  const toggle = document.getElementById('toggle-lyric-ai');
+  if (!toggle) return;
+
+  // Restore the persisted preference (defaults to OFF the first run; once the
+  // user opts in, the choice persists across sessions).
+  let stored = null;
+  try { stored = localStorage.getItem(LYRIC_AI_PREF_KEY); } catch { /* localStorage unavailable */ }
+  state.lyricAiEnabled = stored === null ? false : stored === 'true';
+  toggle.checked = state.lyricAiEnabled;
+  updateLyricAiToggleHint();
+
+  toggle.addEventListener('change', () => {
+    state.lyricAiEnabled = toggle.checked;
+    try { localStorage.setItem(LYRIC_AI_PREF_KEY, String(state.lyricAiEnabled)); } catch { /* localStorage unavailable */ }
+    updateLyricAiToggleHint();
+    logConsole(`Lyric Mood AI ${state.lyricAiEnabled ? 'enabled' : 'disabled'}.`, 'info');
+
+    // Re-evaluate the queue now so the change takes effect immediately.
+    state.queue = [];
+    fillQueue();
+    if (state.lyricAiEnabled) runLyricMoodAnalysis();
+  });
+}
+
 /**
  * Ask Claude (via the main process) whether each lyric-bearing track fits the
  * active mood, then refresh the queue so verdicts take effect. No-op without
  * an API key. Re-entrant safe: a mood change mid-flight discards stale results.
  */
 async function runLyricMoodAnalysis() {
+  if (!state.lyricAiEnabled) return; // master switch off
   if (!aiStatus.configured || state.library.length === 0) return;
+
+  // A genre custom mood ("trance", "metal", …) is matched on sound, not lyrics —
+  // the lyric judge has no say, so don't spend the model on it.
+  if (state.mood === 'custom') {
+    const genreMood = detectGenreMood(state.customMoodPrompt);
+    if (genreMood) {
+      logConsole(`Custom mood "${state.customMoodPrompt}" recognized as a genre (${genreMood.genre}) — matching by sound, skipping lyric analysis.`, 'info');
+      return;
+    }
+  }
+
   const moodKey = lyricMoodKey();
   const description = lyricMoodDescription();
   if (!description) return;
@@ -1804,6 +1862,357 @@ function setUpAiSettings() {
       lastLoggedPct = data.pct;
       logConsole(`Lyric AI: downloading local model... ${data.pct}%`, 'info');
     }
+  });
+}
+
+// --- Discord Rich Presence Settings -------------------------------------------
+
+let discordStatus = { enabled: false, clientId: '', username: '', connected: false };
+
+async function refreshDiscordStatus() {
+  try {
+    const status = await window.api.discordGetStatus();
+    discordStatus = status;
+    updateDiscordSettingsUI();
+  } catch (err) {
+    console.error('Failed to get Discord status:', err);
+  }
+}
+
+function updateDiscordSettingsUI() {
+  const discordStatusBadge = document.getElementById('discord-status-badge');
+  const discordEnabledToggle = document.getElementById('discord-enabled-toggle');
+  const discordClientIdInput = document.getElementById('discord-client-id-input');
+  const discordClientSecretInput = document.getElementById('discord-client-secret-input');
+  const btnDiscordDisconnect = document.getElementById('btn-discord-disconnect');
+  const discordUserInfo = document.getElementById('discord-user-info');
+  const discordUsernameDisplay = document.getElementById('discord-username-display');
+
+  if (!discordStatusBadge) return;
+
+  // Toggle state
+  discordEnabledToggle.checked = discordStatus.enabled;
+
+  // Status Badge
+  if (discordStatus.enabled && discordStatus.connected) {
+    discordStatusBadge.innerText = 'Connected';
+    discordStatusBadge.style.background = 'rgba(16, 185, 129, 0.2)';
+    discordStatusBadge.style.color = '#10b981';
+  } else if (discordStatus.enabled) {
+    discordStatusBadge.innerText = 'Enabled';
+    discordStatusBadge.style.background = 'rgba(245, 158, 11, 0.2)';
+    discordStatusBadge.style.color = '#f59e0b';
+  } else {
+    discordStatusBadge.innerText = 'Off';
+    discordStatusBadge.style.background = 'rgba(255, 255, 255, 0.1)';
+    discordStatusBadge.style.color = 'var(--text-muted)';
+  }
+
+  // Populate inputs
+  if (document.activeElement !== discordClientIdInput) {
+    discordClientIdInput.value = discordStatus.clientId || '';
+  }
+  if (document.activeElement !== discordClientSecretInput) {
+    discordClientSecretInput.value = discordStatus.clientSecret || '';
+  }
+
+  // Connected user profile info
+  if (discordStatus.username) {
+    discordUsernameDisplay.innerText = discordStatus.username;
+    discordUserInfo.style.display = 'flex';
+    btnDiscordDisconnect.classList.remove('hidden');
+  } else {
+    discordUsernameDisplay.innerText = 'Not connected';
+    discordUserInfo.style.display = 'none';
+    btnDiscordDisconnect.classList.add('hidden');
+  }
+}
+
+function setUpDiscordSettings() {
+  const discordEnabledToggle = document.getElementById('discord-enabled-toggle');
+  const discordClientIdInput = document.getElementById('discord-client-id-input');
+  const discordClientSecretInput = document.getElementById('discord-client-secret-input');
+  const btnDiscordDisconnect = document.getElementById('btn-discord-disconnect');
+  const btnDiscordSave = document.getElementById('btn-discord-save');
+  const btnDiscordAuthorize = document.getElementById('btn-discord-authorize');
+  const linkDiscordPortal = document.getElementById('link-discord-portal');
+
+  refreshDiscordStatus();
+
+  // Handle Enable toggle changes
+  discordEnabledToggle.addEventListener('change', async () => {
+    const config = {
+      enabled: discordEnabledToggle.checked,
+      clientId: discordClientIdInput.value.trim(),
+      clientSecret: discordClientSecretInput.value.trim()
+    };
+    const result = await window.api.discordSetConfig(config);
+    if (result && result.ok) {
+      discordStatus = result;
+      updateDiscordSettingsUI();
+      logConsole(`Discord Rich Presence ${discordStatus.enabled ? 'enabled' : 'disabled'}.`, 'info');
+    }
+  });
+
+  // Handle Save Configuration button click
+  btnDiscordSave.addEventListener('click', async () => {
+    const config = {
+      enabled: discordEnabledToggle.checked,
+      clientId: discordClientIdInput.value.trim(),
+      clientSecret: discordClientSecretInput.value.trim()
+    };
+    
+    btnDiscordSave.innerText = 'Saving...';
+    btnDiscordSave.disabled = true;
+    
+    try {
+      const result = await window.api.discordSetConfig(config);
+      if (result && result.ok) {
+        discordStatus = result;
+        updateDiscordSettingsUI();
+        logConsole('Discord configuration saved.', 'success');
+      } else {
+        logConsole('Failed to save Discord configuration.', 'warning');
+      }
+    } catch (err) {
+      logConsole(`Error saving Discord configuration: ${err.message}`, 'warning');
+    } finally {
+      btnDiscordSave.innerText = 'Save Configuration';
+      btnDiscordSave.disabled = false;
+    }
+  });
+
+  // Handle Connect & Authorize button click
+  btnDiscordAuthorize.addEventListener('click', async () => {
+    const config = {
+      enabled: discordEnabledToggle.checked,
+      clientId: discordClientIdInput.value.trim(),
+      clientSecret: discordClientSecretInput.value.trim()
+    };
+
+    if (!config.clientId || !config.clientSecret) {
+      logConsole('Discord Connection: both Client ID and Client Secret are required for OAuth.', 'warning');
+      return;
+    }
+
+    btnDiscordAuthorize.innerText = 'Connecting...';
+    btnDiscordAuthorize.disabled = true;
+    logConsole('Discord Auth: loopback server started. Please check your browser to authorize.', 'info');
+
+    try {
+      const result = await window.api.discordAuthorize(config);
+      if (result && result.ok) {
+        discordStatus.username = result.username;
+        discordStatus.connected = result.connected;
+        discordStatus.enabled = true; // Auto-enable on successful auth
+        updateDiscordSettingsUI();
+        logConsole(`Discord Auth: successfully linked account ${result.username}!`, 'success');
+      } else {
+        logConsole(`Discord Auth failed: ${result.error || 'unknown error'}`, 'warning');
+      }
+    } catch (err) {
+      logConsole(`Discord Auth error: ${err.message}`, 'warning');
+    } finally {
+      btnDiscordAuthorize.innerText = 'Connect & Authorize';
+      btnDiscordAuthorize.disabled = false;
+      refreshDiscordStatus();
+    }
+  });
+
+  // Handle Disconnect button click
+  btnDiscordDisconnect.addEventListener('click', async () => {
+    try {
+      const result = await window.api.discordDisconnect();
+      if (result && result.ok) {
+        discordStatus.username = '';
+        discordStatus.connected = false;
+        discordClientSecretInput.value = '';
+        updateDiscordSettingsUI();
+        logConsole('Discord account unlinked.', 'info');
+      }
+    } catch (err) {
+      logConsole(`Error disconnecting from Discord: ${err.message}`, 'warning');
+    }
+  });
+
+  // Open Discord Developer Portal link externally
+  linkDiscordPortal.addEventListener('click', (e) => {
+    e.preventDefault();
+    window.api.openExternal('https://discord.com/developers/applications');
+  });
+}
+
+// --- Last.fm Scrobbling Settings ---------------------------------------------
+
+let lastfmStatus = { enabled: false, apiKey: '', apiSecret: '', sessionKey: '', username: '' };
+
+async function refreshLastfmStatus() {
+  try {
+    const status = await window.api.lastfmGetStatus();
+    lastfmStatus = status;
+    updateLastfmSettingsUI();
+  } catch (err) {
+    console.error('Failed to get Last.fm status:', err);
+  }
+}
+
+function updateLastfmSettingsUI() {
+  const lastfmStatusBadge = document.getElementById('lastfm-status-badge');
+  const lastfmEnabledToggle = document.getElementById('lastfm-enabled-toggle');
+  const lastfmApiKeyInput = document.getElementById('lastfm-api-key-input');
+  const lastfmApiSecretInput = document.getElementById('lastfm-api-secret-input');
+  const btnLastfmDisconnect = document.getElementById('btn-lastfm-disconnect');
+  const lastfmUserInfo = document.getElementById('lastfm-user-info');
+  const lastfmUsernameDisplay = document.getElementById('lastfm-username-display');
+
+  if (!lastfmStatusBadge) return;
+
+  lastfmEnabledToggle.checked = lastfmStatus.enabled;
+
+  // A session key means the account is linked and ready to scrobble.
+  const linked = Boolean(lastfmStatus.sessionKey);
+
+  if (lastfmStatus.enabled && linked) {
+    lastfmStatusBadge.innerText = 'Connected';
+    lastfmStatusBadge.style.background = 'rgba(16, 185, 129, 0.2)';
+    lastfmStatusBadge.style.color = '#10b981';
+  } else if (lastfmStatus.enabled) {
+    lastfmStatusBadge.innerText = 'Enabled';
+    lastfmStatusBadge.style.background = 'rgba(245, 158, 11, 0.2)';
+    lastfmStatusBadge.style.color = '#f59e0b';
+  } else {
+    lastfmStatusBadge.innerText = 'Off';
+    lastfmStatusBadge.style.background = 'rgba(255, 255, 255, 0.1)';
+    lastfmStatusBadge.style.color = 'var(--text-muted)';
+  }
+
+  // Don't clobber a field the user is currently editing.
+  if (document.activeElement !== lastfmApiKeyInput) {
+    lastfmApiKeyInput.value = lastfmStatus.apiKey || '';
+  }
+  if (document.activeElement !== lastfmApiSecretInput) {
+    lastfmApiSecretInput.value = lastfmStatus.apiSecret || '';
+  }
+
+  if (lastfmStatus.username) {
+    lastfmUsernameDisplay.innerText = lastfmStatus.username;
+    lastfmUserInfo.style.display = 'flex';
+    btnLastfmDisconnect.classList.remove('hidden');
+  } else {
+    lastfmUsernameDisplay.innerText = 'Not connected';
+    lastfmUserInfo.style.display = 'none';
+    btnLastfmDisconnect.classList.add('hidden');
+  }
+}
+
+function setUpLastfmSettings() {
+  const lastfmEnabledToggle = document.getElementById('lastfm-enabled-toggle');
+  const lastfmApiKeyInput = document.getElementById('lastfm-api-key-input');
+  const lastfmApiSecretInput = document.getElementById('lastfm-api-secret-input');
+  const btnLastfmDisconnect = document.getElementById('btn-lastfm-disconnect');
+  const btnLastfmSave = document.getElementById('btn-lastfm-save');
+  const btnLastfmAuthorize = document.getElementById('btn-lastfm-authorize');
+  const linkLastfmPortal = document.getElementById('link-lastfm-portal');
+
+  refreshLastfmStatus();
+
+  // Toggle enable/disable
+  lastfmEnabledToggle.addEventListener('change', async () => {
+    const config = {
+      enabled: lastfmEnabledToggle.checked,
+      apiKey: lastfmApiKeyInput.value.trim(),
+      apiSecret: lastfmApiSecretInput.value.trim()
+    };
+    const result = await window.api.lastfmSetConfig(config);
+    if (result && result.ok) {
+      lastfmStatus = result;
+      updateLastfmSettingsUI();
+      logConsole(`Last.fm scrobbling ${lastfmStatus.enabled ? 'enabled' : 'disabled'}.`, 'info');
+    }
+  });
+
+  // Save configuration without launching the auth flow
+  btnLastfmSave.addEventListener('click', async () => {
+    const config = {
+      enabled: lastfmEnabledToggle.checked,
+      apiKey: lastfmApiKeyInput.value.trim(),
+      apiSecret: lastfmApiSecretInput.value.trim()
+    };
+
+    btnLastfmSave.innerText = 'Saving...';
+    btnLastfmSave.disabled = true;
+    try {
+      const result = await window.api.lastfmSetConfig(config);
+      if (result && result.ok) {
+        lastfmStatus = result;
+        updateLastfmSettingsUI();
+        logConsole('Last.fm configuration saved.', 'success');
+      } else {
+        logConsole('Failed to save Last.fm configuration.', 'warning');
+      }
+    } catch (err) {
+      logConsole(`Error saving Last.fm configuration: ${err.message}`, 'warning');
+    } finally {
+      btnLastfmSave.innerText = 'Save Configuration';
+      btnLastfmSave.disabled = false;
+    }
+  });
+
+  // Launch the browser auth flow to obtain a session key
+  btnLastfmAuthorize.addEventListener('click', async () => {
+    const config = {
+      enabled: lastfmEnabledToggle.checked,
+      apiKey: lastfmApiKeyInput.value.trim(),
+      apiSecret: lastfmApiSecretInput.value.trim()
+    };
+
+    if (!config.apiKey || !config.apiSecret) {
+      logConsole('Last.fm Connection: both API Key and Shared Secret are required to authorize.', 'warning');
+      return;
+    }
+
+    btnLastfmAuthorize.innerText = 'Connecting...';
+    btnLastfmAuthorize.disabled = true;
+    logConsole('Last.fm Auth: redirect server started. Please check your browser to authorize.', 'info');
+
+    try {
+      const result = await window.api.lastfmAuthorize(config);
+      if (result && result.ok) {
+        lastfmStatus.username = result.username;
+        lastfmStatus.enabled = true; // Auto-enable on successful auth
+        updateLastfmSettingsUI();
+        logConsole(`Last.fm Auth: successfully linked account ${result.username}!`, 'success');
+      } else {
+        logConsole(`Last.fm Auth failed: ${result.error || 'unknown error'}`, 'warning');
+      }
+    } catch (err) {
+      logConsole(`Last.fm Auth error: ${err.message}`, 'warning');
+    } finally {
+      btnLastfmAuthorize.innerText = 'Connect & Authorize';
+      btnLastfmAuthorize.disabled = false;
+      refreshLastfmStatus();
+    }
+  });
+
+  // Unlink the account (clears the session key)
+  btnLastfmDisconnect.addEventListener('click', async () => {
+    try {
+      const result = await window.api.lastfmDisconnect();
+      if (result && result.ok) {
+        lastfmStatus.username = '';
+        lastfmStatus.sessionKey = '';
+        updateLastfmSettingsUI();
+        logConsole('Last.fm account unlinked.', 'info');
+      }
+    } catch (err) {
+      logConsole(`Error disconnecting from Last.fm: ${err.message}`, 'warning');
+    }
+  });
+
+  // Open the Last.fm API account creation page externally
+  linkLastfmPortal.addEventListener('click', (e) => {
+    e.preventDefault();
+    window.api.openExternal('https://www.last.fm/api/account/create');
   });
 }
 
@@ -1997,6 +2406,92 @@ function getSonicProfile(track) {
   return foundKey;
 }
 
+// --- Custom-mood routing: genre (sonic) vs. feeling (lyrical) ---
+// A custom prompt like "trance" or "metal" names a SOUND, not a lyrical theme.
+// Judging it by lyrics (Gemma/Claude) is meaningless — a metal track with
+// hypnotic lyrics would "fit" trance. So when a custom prompt names a genre, we
+// gate on the track's Sonic Profile instead, and skip the lyric judge entirely.
+// Each genre maps to the Sonic Profile(s) that embody it (mirroring the
+// classifications getSonicProfile assigns), widened only to tightly-adjacent
+// profiles so we never cross an energy boundary (e.g. trance never reaches rock).
+const GENRE_MOOD_PROFILES = {
+  // Electronic / dance family → the two electronic profiles
+  'trance': ['DANCE_FLOOR', 'BIG_BEAT'],
+  'house': ['DANCE_FLOOR', 'BIG_BEAT'],
+  'edm': ['DANCE_FLOOR', 'BIG_BEAT'],
+  'dance': ['DANCE_FLOOR', 'BIG_BEAT'],
+  'club': ['DANCE_FLOOR', 'BIG_BEAT'],
+  'rave': ['DANCE_FLOOR', 'BIG_BEAT'],
+  'electronic': ['BIG_BEAT', 'DANCE_FLOOR'],
+  'electronica': ['BIG_BEAT', 'DANCE_FLOOR'],
+  'techno': ['BIG_BEAT', 'DANCE_FLOOR'],
+  // Hip-hop / beats
+  'hip hop': ['BIG_BEAT'],
+  'hip-hop': ['BIG_BEAT'],
+  'rap': ['BIG_BEAT'],
+  'trip hop': ['BIG_BEAT'],
+  // Industrial
+  'industrial': ['BUSY_INDUSTRIAL', 'HEAVY_ROCK'],
+  // Metal / hard rock
+  'metal': ['HEAVY_ROCK', 'BUSY_INDUSTRIAL'],
+  'heavy metal': ['HEAVY_ROCK', 'BUSY_INDUSTRIAL'],
+  'hard rock': ['HEAVY_ROCK'],
+  'hardcore': ['HEAVY_ROCK', 'BUSY_INDUSTRIAL'],
+  // Alternative / punk
+  'punk': ['DRIVING_ALT', 'HEAVY_ROCK'],
+  'pop-punk': ['DRIVING_ALT'],
+  'pop punk': ['DRIVING_ALT'],
+  'emo': ['DRIVING_ALT'],
+  'grunge': ['DRIVING_ALT', 'HEAVY_ROCK'],
+  'alternative': ['DRIVING_ALT'],
+  'alt-rock': ['DRIVING_ALT'],
+  // Rock (broad) / pop
+  'rock': ['CLASSIC_POP', 'DRIVING_ALT', 'HEAVY_ROCK'],
+  'classic rock': ['CLASSIC_POP'],
+  'new wave': ['CLASSIC_POP'],
+  'pop': ['CLASSIC_POP'],
+  // Worship / CCM
+  'worship': ['STEADY_CCM', 'INTIMATE'],
+  'praise': ['STEADY_CCM'],
+  'hymn': ['STEADY_CCM'],
+  'gospel': ['STEADY_CCM'],
+  'ccm': ['STEADY_CCM', 'INTIMATE'],
+  // Acoustic / intimate
+  'acoustic': ['INTIMATE'],
+  'singer-songwriter': ['INTIMATE'],
+  'ambient': ['INTIMATE'],
+  'new age': ['INTIMATE'],
+  'folk': ['INTIMATE', 'TRADITIONAL'],
+  // Traditional / jazz / classical / country
+  'jazz': ['TRADITIONAL'],
+  'swing': ['TRADITIONAL'],
+  'big band': ['TRADITIONAL'],
+  'blues': ['TRADITIONAL', 'CLASSIC_POP'],
+  'classical': ['TRADITIONAL'],
+  'orchestral': ['TRADITIONAL'],
+  'country': ['TRADITIONAL'],
+  'bluegrass': ['TRADITIONAL'],
+  'celtic': ['TRADITIONAL'],
+  'irish': ['TRADITIONAL'],
+};
+
+/**
+ * If a custom-mood prompt names a recognized genre/sonic style, returns the
+ * matching Sonic Profile(s) to gate on; otherwise null (treat as a lyrical/feel
+ * vibe). Longer keys are tested first so "hard rock" wins over a bare "rock".
+ * @param {string} prompt
+ * @returns {{genre: string, profiles: string[]}|null}
+ */
+function detectGenreMood(prompt) {
+  const p = (prompt || '').toLowerCase().trim();
+  if (!p) return null;
+  const entries = Object.entries(GENRE_MOOD_PROFILES).sort((a, b) => b[0].length - a[0].length);
+  for (const [genre, profiles] of entries) {
+    if (wordMatch(p, genre)) return { genre, profiles };
+  }
+  return null;
+}
+
 /**
  * Decide whether a track fits the requested mood, using its Sonic DNA
  * profile plus BPM-based elasticity rules for adjacent styles.
@@ -2013,6 +2508,16 @@ function doesTrackMatchMood(track, mood) {
   // tracks without lyrics or before analysis completes fall back to keyword search.
   if (sMood === 'custom') {
     if (!state.customMoodPrompt) return true;
+
+    // Genre/sonic prompts ("trance", "metal", "acoustic") are about SOUND.
+    // Gate on the track's Sonic Profile and ignore the lyric judge entirely.
+    const genreMood = detectGenreMood(state.customMoodPrompt);
+    if (genreMood) {
+      return genreMood.profiles.includes(getSonicProfile(track));
+    }
+
+    // Feeling/thematic prompts ("rainy Sunday", "songs about heartbreak") stay
+    // on the lyric path: the AI verdict is authoritative, keyword as fallback.
     const lyricVerdict = getLyricVerdict(track);
     if (lyricVerdict !== undefined) return lyricVerdict;
     const promptWords = state.customMoodPrompt.toLowerCase().split(' ');
@@ -2249,18 +2754,27 @@ function getHeuristicScore(track, currentBpm, currentGenre, currentKey, referenc
   
   // 1. Mood Matching (Primary Factor)
   if (state.mood === 'custom') {
-    const promptWords = state.customMoodPrompt.toLowerCase().split(' ');
-    const searchArea = `${track.title} ${track.artist} ${track.genre} ${track.mood || ''}`.toLowerCase();
-    let matches = 0;
-    promptWords.forEach(w => {
-      if (w.length > 2 && searchArea.includes(w)) matches++;
-    });
-    score += matches * 100;
+    const genreMood = detectGenreMood(state.customMoodPrompt);
+    if (genreMood) {
+      // Genre prompt: score on Sonic Profile, not lyrics. doesTrackMatchMood
+      // already gates candidacy; this just orders the survivors.
+      if (genreMood.profiles.includes(getSonicProfile(track))) score += 500;
+      else score -= 1000;
+    } else {
+      // Feeling prompt: keyword hits + lyric verdict, as before.
+      const promptWords = state.customMoodPrompt.toLowerCase().split(' ');
+      const searchArea = `${track.title} ${track.artist} ${track.genre} ${track.mood || ''}`.toLowerCase();
+      let matches = 0;
+      promptWords.forEach(w => {
+        if (w.length > 2 && searchArea.includes(w)) matches++;
+      });
+      score += matches * 100;
 
-    // Claude lyric verdict dominates keyword hits when present
-    const lyricVerdict = getLyricVerdict(track);
-    if (lyricVerdict === true) score += 400;
-    else if (lyricVerdict === false) score -= 400;
+      // Claude lyric verdict dominates keyword hits when present
+      const lyricVerdict = getLyricVerdict(track);
+      if (lyricVerdict === true) score += 400;
+      else if (lyricVerdict === false) score -= 400;
+    }
   } else {
     // Stricter checking for the active mood
     const isMoodMatch = doesTrackMatchMood(track, state.mood);

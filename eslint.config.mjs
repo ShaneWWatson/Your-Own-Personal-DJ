@@ -46,6 +46,7 @@ export default [
         document: 'readonly',
         console: 'readonly',
         fetch: 'readonly',
+        localStorage: 'readonly',
         indexedDB: 'readonly',
         IDBKeyRange: 'readonly',
         Worker: 'readonly',

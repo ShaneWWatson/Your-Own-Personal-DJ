@@ -147,11 +147,16 @@ function deriveMood({ bpm, scale, rms }) {
     return 'uplifting';
   }
 
-  // Fallback for everything else
-  // If it's fast, it can be energy/party.
-  // If it's slow, even if loud, it shouldn't be High Energy.
+  // Fallback for everything else.
+  // If it's fast, it can be energy/party — but ONLY if there's real loudness
+  // behind the tempo. A fast-but-quiet track (e.g. an up-tempo choir piece at
+  // 140 BPM) isn't a banger, so don't dump it into party/energy by default.
   if (bpm > 125) {
-    return isMinor ? 'energy' : 'party';
+    if (highEnergy) {
+      return isMinor ? 'energy' : 'party';
+    }
+    // Fast but not loud: bright major reads as uplifting, minor as neutral focus.
+    return isMinor ? 'focus' : 'uplifting';
   }
 
   // Don't blanket-label leftover major-key tracks "uplifting" — that overstates

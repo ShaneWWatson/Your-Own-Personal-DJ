@@ -31,6 +31,18 @@ contextBridge.exposeInMainWorld('api', {
   onAiAnalyzeProgress: (callback) => ipcRenderer.on('ai-analyze-progress', (event, data) => callback(data)),
   onAiModelDownloadProgress: (callback) => ipcRenderer.on('ai-model-download-progress', (event, data) => callback(data)),
   
+  // Discord Integration
+  discordGetStatus: () => ipcRenderer.invoke('discord-get-status'),
+  discordSetConfig: (config) => ipcRenderer.invoke('discord-set-config', config),
+  discordAuthorize: (config) => ipcRenderer.invoke('discord-authorize', config),
+  discordDisconnect: () => ipcRenderer.invoke('discord-disconnect'),
+
+  // Last.fm Scrobbling
+  lastfmGetStatus: () => ipcRenderer.invoke('lastfm-get-status'),
+  lastfmSetConfig: (config) => ipcRenderer.invoke('lastfm-set-config', config),
+  lastfmAuthorize: (config) => ipcRenderer.invoke('lastfm-authorize', config),
+  lastfmDisconnect: () => ipcRenderer.invoke('lastfm-disconnect'),
+
   // Audio Process Communication Bridge
   sendToAudio: (data) => ipcRenderer.send('to-audio-player', data),
   onAudioCommand: (callback) => ipcRenderer.on('audio-player-command', (event, data) => callback(data)),
