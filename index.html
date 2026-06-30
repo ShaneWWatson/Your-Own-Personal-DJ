@@ -5,7 +5,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self' app-media:; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://coverartarchive.org https://*.archive.org app-media:; connect-src 'self' https://musicbrainz.org https://coverartarchive.org https://*.archive.org;">
+    content="default-src 'self' app-media:; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://coverartarchive.org https://archive.org https://*.archive.org app-media:; connect-src 'self' https://musicbrainz.org https://coverartarchive.org https://archive.org https://*.archive.org;">
   <title>Your Own Personal DJ</title>
   <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -13,7 +13,7 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap"
     rel="stylesheet">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=20260624">
 </head>
 
 <body>
@@ -121,6 +121,21 @@
           <div class="console-line system">[System] Welcome to Your Own Personal DJ. Ready to load music files.</div>
         </div>
       </section>
+
+      <!-- Lyric Mood AI master switch (also available in Settings) -->
+      <section class="sidebar-section lyric-ai-toggle-section">
+        <div class="lyric-ai-toggle-row">
+          <div class="lyric-ai-toggle-text">
+            <span class="lyric-ai-toggle-label">Lyric Mood AI</span>
+            <span id="lyric-ai-toggle-hint" class="lyric-ai-toggle-hint">Judging lyrics to refine mood picks</span>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="toggle-lyric-ai" aria-label="Toggle Lyric Mood AI analysis"
+              title="Toggle Lyric Mood AI analysis">
+            <span class="slider-round"></span>
+          </label>
+        </div>
+      </section>
     </aside>
 
     <!-- MAIN DASHBOARD -->
@@ -177,6 +192,11 @@
               <span class="mood-name">Party Vibes</span>
               <span class="mood-desc">Danceable, grooving beats & high tempo</span>
             </button>
+            <button class="mood-card" data-mood="uplifting">
+              <span class="mood-icon">🌅</span>
+              <span class="mood-name">Uplifting</span>
+              <span class="mood-desc">Hopeful, encouraging lyrics & warm feel</span>
+            </button>
             <button class="mood-card" data-mood="custom">
               <span class="mood-icon">🔮</span>
               <span class="mood-name">Custom Mood</span>
@@ -188,7 +208,7 @@
           <div id="custom-mood-container" class="custom-mood-container hidden">
             <div class="custom-input-wrapper">
               <input type="text" id="custom-mood-input"
-                placeholder="Describe the vibe... (e.g. 'coding at midnight on a rainy cyber cafe', 'peaceful acoustic morning')" />
+                placeholder="Describe the vibe... (e.g. 'coding at midnight on a rainy evening at a cyber cafe', 'peaceful acoustic morning')" />
               <button id="btn-apply-custom-mood" class="btn-secondary">Apply Vibe</button>
             </div>
           </div>
@@ -369,7 +389,6 @@
       </div>
 
       <div class="settings-body">
-        <!-- App Version -->
         <div class="settings-row settings-row-divider">
           <span class="settings-label">App Version</span>
           <span class="settings-value">2.2.0</span>
@@ -397,6 +416,148 @@
           <label class="settings-label">Essentia Audio Engine (Bundled)</label>
           <span id="model-status-badge" class="badge bpm-badge settings-status-badge">Bundled</span>
         </div>
+
+        <!-- Lyric Mood AI -->
+        <div style="display: flex; flex-direction: column; gap: 8px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 14px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <label style="font-size: 0.85rem; color: var(--text-muted);">Lyric Mood AI</label>
+            <span id="lyric-ai-status-badge" class="badge bpm-badge"
+              style="font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; text-transform: uppercase;">Off</span>
+          </div>
+          <p style="font-size: 0.72rem; color: var(--text-muted); margin: 0;">
+            Songs with embedded lyrics are checked against your selected mood — especially custom vibes.
+            The local model is free and 100% private (one ~1&nbsp;GB download, then fully offline, no account).
+            Songs without lyrics use the normal sonic engine.
+          </p>
+          <select id="lyric-ai-provider-select"
+            style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.06); color: white; padding: 10px; border-radius: 8px; font-family: var(--font-sans); font-size: 0.85rem; outline: none; width: 100%;">
+            <option value="local">Local model — private &amp; free (Qwen 2.5, on this PC)</option>
+            <option value="anthropic">Claude API — strongest judgment (needs API key)</option>
+          </select>
+          <div id="anthropic-config-fields" style="display: flex; flex-direction: column; gap: 8px;">
+            <input type="password" id="anthropic-key-input" placeholder="Anthropic API key (sk-ant-...)"
+              autocomplete="off"
+              style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.06); color: white; padding: 10px; border-radius: 8px; font-family: var(--font-mono); font-size: 0.8rem; outline: none; width: 100%;">
+            <select id="anthropic-model-select"
+              style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.06); color: white; padding: 10px; border-radius: 8px; font-family: var(--font-sans); font-size: 0.85rem; outline: none; width: 100%;">
+              <option value="claude-opus-4-8">Claude Opus 4.8 (best judgment)</option>
+              <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (balanced)</option>
+              <option value="claude-haiku-4-5">Claude Haiku 4.5 (cheapest)</option>
+            </select>
+          </div>
+          <button id="btn-save-ai-config" class="btn-secondary" style="align-self: flex-end;">Save</button>
+        </div>
+
+        <!-- Discord Integration -->
+        <div style="display: flex; flex-direction: column; gap: 8px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 14px; margin-top: 6px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <label style="font-size: 0.85rem; color: var(--text-muted);">Discord Integration</label>
+            <span id="discord-status-badge" class="badge bpm-badge"
+              style="font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; text-transform: uppercase;">Off</span>
+          </div>
+          <p style="font-size: 0.72rem; color: var(--text-muted); margin: 0;">
+            Show the song currently playing on your Discord profile using Rich Presence.
+            Requires setting up your own Discord Developer application for OAuth2 authentication.
+          </p>
+          
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <input type="checkbox" id="discord-enabled-toggle" style="cursor: pointer; width: auto; height: auto;">
+            <label for="discord-enabled-toggle" style="font-size: 0.8rem; color: white; cursor: pointer; user-select: none; margin: 0;">Enable Discord Rich Presence</label>
+          </div>
+
+          <div id="discord-config-fields" style="display: flex; flex-direction: column; gap: 8px;">
+            <input type="text" id="discord-client-id-input" placeholder="Discord Application Client ID"
+              autocomplete="off"
+              style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.06); color: white; padding: 10px; border-radius: 8px; font-family: var(--font-mono); font-size: 0.8rem; outline: none; width: 100%;">
+            <input type="password" id="discord-client-secret-input" placeholder="Discord Client Secret"
+              autocomplete="off"
+              style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.06); color: white; padding: 10px; border-radius: 8px; font-family: var(--font-mono); font-size: 0.8rem; outline: none; width: 100%;">
+            
+            <div style="display: flex; gap: 8px; align-items: center; justify-content: flex-end;">
+              <button id="btn-discord-disconnect" class="btn-secondary hidden" style="background: rgba(220, 38, 38, 0.2); border-color: rgba(220, 38, 38, 0.4);">Disconnect</button>
+              <button id="btn-discord-save" class="btn-secondary">Save Configuration</button>
+              <button id="btn-discord-authorize" class="btn-secondary">Connect &amp; Authorize</button>
+            </div>
+            
+            <div id="discord-user-info" style="font-size: 0.75rem; color: var(--text-muted); display: none; align-items: center; gap: 8px; margin-top: 2px;">
+              <span>Connected as:</span>
+              <strong id="discord-username-display" style="color: var(--secondary);">Not connected</strong>
+            </div>
+
+            <div style="font-size: 0.68rem; color: var(--text-muted); line-height: 1.4; margin-top: 4px; border-top: 1px solid rgba(255,255,255,0.03); padding-top: 6px;">
+              <strong>Instructions:</strong><br>
+              1. Go to the <a href="#" id="link-discord-portal" style="color: var(--secondary); text-decoration: none;">Discord Developer Portal</a> and create a New Application.<br>
+              2. Under <strong>OAuth2</strong>, add the Redirect URI: <code style="background: rgba(255,255,255,0.1); padding: 1px 4px; border-radius: 3px; font-family: var(--font-mono); font-size: 0.65rem;">http://localhost:50124/callback</code><br>
+              3. Paste the Client ID and Client Secret here, check "Enable", and click "Save" or "Connect &amp; Authorize".
+            </div>
+          </div>
+        </div>
+
+        <!-- Last.fm Scrobbling -->
+        <div style="display: flex; flex-direction: column; gap: 8px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 14px; margin-top: 6px;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <label style="font-size: 0.85rem; color: var(--text-muted);">Last.fm Scrobbling</label>
+            <span id="lastfm-status-badge" class="badge bpm-badge"
+              style="font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; text-transform: uppercase;">Off</span>
+          </div>
+          <p style="font-size: 0.72rem; color: var(--text-muted); margin: 0;">
+            Scrobble the tracks you play to your Last.fm profile and update your "Now Playing" status.
+            Requires your own Last.fm API account (free).
+          </p>
+
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <input type="checkbox" id="lastfm-enabled-toggle" style="cursor: pointer; width: auto; height: auto;">
+            <label for="lastfm-enabled-toggle" style="font-size: 0.8rem; color: white; cursor: pointer; user-select: none; margin: 0;">Enable Last.fm Scrobbling</label>
+          </div>
+
+          <div id="lastfm-config-fields" style="display: flex; flex-direction: column; gap: 8px;">
+            <input type="text" id="lastfm-api-key-input" placeholder="Last.fm API Key"
+              autocomplete="off"
+              style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.06); color: white; padding: 10px; border-radius: 8px; font-family: var(--font-mono); font-size: 0.8rem; outline: none; width: 100%;">
+            <input type="password" id="lastfm-api-secret-input" placeholder="Last.fm Shared Secret"
+              autocomplete="off"
+              style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.06); color: white; padding: 10px; border-radius: 8px; font-family: var(--font-mono); font-size: 0.8rem; outline: none; width: 100%;">
+
+            <div style="display: flex; gap: 8px; align-items: center; justify-content: flex-end;">
+              <button id="btn-lastfm-disconnect" class="btn-secondary hidden" style="background: rgba(220, 38, 38, 0.2); border-color: rgba(220, 38, 38, 0.4);">Disconnect</button>
+              <button id="btn-lastfm-save" class="btn-secondary">Save Configuration</button>
+              <button id="btn-lastfm-authorize" class="btn-secondary">Connect &amp; Authorize</button>
+            </div>
+
+            <div id="lastfm-user-info" style="font-size: 0.75rem; color: var(--text-muted); display: none; align-items: center; gap: 8px; margin-top: 2px;">
+              <span>Scrobbling as:</span>
+              <strong id="lastfm-username-display" style="color: var(--secondary);">Not connected</strong>
+            </div>
+
+            <div style="font-size: 0.68rem; color: var(--text-muted); line-height: 1.4; margin-top: 4px; border-top: 1px solid rgba(255,255,255,0.03); padding-top: 6px;">
+              <strong>Instructions:</strong><br>
+              1. Go to <a href="#" id="link-lastfm-portal" style="color: var(--secondary); text-decoration: none;">Last.fm API account creation</a> and create an API account.<br>
+              2. Copy the <strong>API Key</strong> and <strong>Shared Secret</strong> into the fields above.<br>
+              3. Check "Enable", then click "Connect &amp; Authorize" and approve access in your browser.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Crisis Support Modal -->
+  <div id="crisis-modal" class="modal-overlay hidden">
+    <div class="modal-content crisis-content">
+      <h3 style="font-size: 1.15rem; font-weight: 700; margin-bottom: 4px;">Before we queue that up&hellip;</h3>
+      <p style="font-size: 0.9rem; line-height: 1.5;">
+        It sounds like this vibe might touch on suicide or self-harm. Your music is yours, and we'll
+        play what you asked for &mdash; but you matter more than any playlist.
+      </p>
+      <ul style="font-size: 0.9rem; line-height: 1.7; padding-left: 18px; margin: 6px 0;">
+        <li>If you're in immediate danger, <strong>call 911</strong>.</li>
+        <li>You can <strong>call or text 988</strong> &mdash; the Suicide &amp; Crisis Lifeline &mdash; any time, 24/7. Free and confidential.</li>
+        <li>Or text <strong>HOME</strong> to <strong>741741</strong> (Crisis Text Line).</li>
+      </ul>
+      <div class="crisis-actions">
+        <button id="btn-crisis-988" class="btn-secondary">Open 988lifeline.org</button>
+        <button id="btn-crisis-continue" class="btn-secondary">Continue with my music</button>
+        <button id="btn-crisis-cancel" class="btn-icon" style="font-size: 0.85rem; padding: 8px 12px;">Not right now</button>
       </div>
     </div>
   </div>

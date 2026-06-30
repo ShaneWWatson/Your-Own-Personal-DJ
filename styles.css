@@ -999,6 +999,41 @@ input:checked + .slider-round:before {
   transform: translateX(16px);
 }
 
+/* Lyric Mood AI on/off toggle (sidebar, under the audio-engine console) */
+.lyric-ai-toggle-section {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding-top: 14px;
+  flex-direction: row;
+}
+
+.lyric-ai-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+}
+
+.lyric-ai-toggle-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.lyric-ai-toggle-label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: white;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.lyric-ai-toggle-hint {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
 .enrichment-content {
   overflow-y: auto;
   font-size: 0.8rem;
@@ -1344,6 +1379,24 @@ input:checked + .slider-round:before {
   text-transform: uppercase;
 }
 
+/* Crisis support modal — calm, warm accent; sits above the settings modal */
+.crisis-content {
+  gap: 10px;
+  max-width: 520px;
+  border-color: rgba(236, 72, 153, 0.35);
+  box-shadow:
+    0 20px 50px rgba(0, 0, 0, 0.5),
+    0 0 30px rgba(236, 72, 153, 0.18);
+}
+
+.crisis-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  justify-content: flex-end;
+}
+
 /* Tabs & Tab-specific Layouts */
 .tabs-nav {
   display: flex;
@@ -1407,31 +1460,158 @@ input:checked + .slider-round:before {
 
 /* Responsive Overrides (Screen width < 1024px or height < 640px) */
 @media (max-width: 1023px), (max-height: 639px) {
+  /* Make the main column a real scroll container. height:auto here used to
+     leave content taller than the window with no scrollbar, so body's
+     overflow:hidden clipped the bottom — hiding the play controls entirely. */
   .main-content {
     overflow-y: auto !important;
-    height: auto !important;
+    height: 100vh !important;
+    padding: 14px !important;
+    gap: 10px !important;
   }
   .tab-content-panel {
     overflow: visible !important;
     height: auto !important;
+    /* Keep natural height instead of letting flex shrink it to fit the window
+       (which would clip the bottom controls and suppress the scrollbar). */
+    flex: 0 0 auto !important;
   }
   .player-grid {
     grid-template-columns: 1fr !important;
     height: auto !important;
+    gap: 14px !important;
   }
   .now-playing-section,
   .queue-and-info-section {
     height: auto !important;
   }
   .coming-up-list {
-    max-height: 240px !important;
+    max-height: 160px !important;
   }
   .library-section,
   .library-card {
     height: auto !important;
   }
   .library-table-container {
-    max-height: 320px !important;
+    max-height: 240px !important;
+  }
+
+  /* --- Compaction so the whole deck (incl. play/pause) fits to 800x600 --- */
+  /* Reclaim horizontal space and let a cramped sidebar scroll on its own */
+  .sidebar {
+    width: 240px;
+    padding: 16px;
+    gap: 14px;
+    overflow-y: auto;
+  }
+  .logo {
+    font-size: 1.15rem;
+  }
+
+  /* Header + mood picker */
+  .dashboard-header {
+    gap: 10px;
+  }
+  .header-intro h1 {
+    font-size: 1.25rem;
+  }
+  .header-intro p {
+    font-size: 0.8rem;
+  }
+  .moods-container {
+    gap: 8px;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  }
+  .mood-card {
+    padding: 8px;
+    gap: 3px;
+  }
+  .mood-icon {
+    font-size: 1.1rem;
+  }
+  .mood-name {
+    font-size: 0.78rem;
+  }
+  .mood-desc {
+    font-size: 0.66rem;
+    line-height: 1.2;
+  }
+
+  /* Now-Playing deck */
+  .glass-card {
+    padding: 14px;
+  }
+  .metadata-badges {
+    top: 12px;
+    left: 12px;
+    gap: 6px;
+  }
+  .badge {
+    padding: 3px 8px;
+    font-size: 0.6rem;
+  }
+  .deck-container {
+    margin-top: 10px;
+    margin-bottom: 10px;
+  }
+  .vinyl-disc {
+    width: 104px;
+    height: 104px;
+  }
+  .album-art {
+    width: 44px;
+    height: 44px;
+  }
+  .waveform-canvas {
+    height: 30px;
+    margin-top: 8px;
+  }
+  .track-details {
+    margin-bottom: 10px;
+  }
+  .track-title {
+    font-size: 1.05rem;
+  }
+  .track-artist {
+    font-size: 0.8rem;
+  }
+  .track-album {
+    font-size: 0.72rem;
+  }
+  .player-progress {
+    margin-bottom: 10px;
+    gap: 8px;
+  }
+  .time-label {
+    font-size: 0.7rem;
+  }
+
+  /* Keep controls compact but easy to hit */
+  .player-controls {
+    gap: 12px;
+  }
+  .btn-play-pause {
+    width: 46px;
+    height: 46px;
+  }
+  .btn-play-pause svg {
+    width: 22px;
+    height: 22px;
+  }
+  .btn-control {
+    width: 34px;
+    height: 34px;
+  }
+  .btn-control svg {
+    width: 18px;
+    height: 18px;
+  }
+  .volume-container {
+    margin-left: 6px;
+    gap: 6px;
+  }
+  .volume-slider {
+    width: 60px;
   }
 }
 
@@ -1454,6 +1634,24 @@ input:checked + .slider-round:before {
   .main-content {
     padding: 16px;
     gap: 12px;
+    overflow-y: auto !important;
+    height: 100vh !important;
+  }
+  /* Let content flow and scroll on short wide screens (e.g. 1366x768) so the
+     play/rewind/skip controls are never clipped by a fixed-height layout. */
+  .tab-content-panel {
+    overflow: visible !important;
+    height: auto !important;
+    /* Keep natural height instead of letting flex shrink it to fit the window
+       (which would clip the bottom controls and suppress the scrollbar). */
+    flex: 0 0 auto !important;
+  }
+  .player-grid {
+    height: auto !important;
+  }
+  .now-playing-section,
+  .queue-and-info-section {
+    height: auto !important;
   }
   .dashboard-header {
     gap: 12px;
@@ -1466,7 +1664,8 @@ input:checked + .slider-round:before {
   }
   .moods-container {
     gap: 10px;
-    grid-template-columns: repeat(5, 1fr);
+    /* All 6 mood cards on one row so they don't wrap and push the player down */
+    grid-template-columns: repeat(6, 1fr);
   }
   .mood-card {
     padding: 10px;
@@ -1488,22 +1687,26 @@ input:checked + .slider-round:before {
   .glass-card {
     padding: 16px;
   }
-  .vinyl-disc {
-    width: 130px;
-    height: 130px;
+  .deck-container {
     margin-top: 8px;
     margin-bottom: 8px;
   }
+  .vinyl-disc {
+    width: 104px;
+    height: 104px;
+    margin-top: 6px;
+    margin-bottom: 6px;
+  }
   .album-art {
-    width: 52px;
-    height: 52px;
+    width: 44px;
+    height: 44px;
   }
   .waveform-canvas {
-    height: 36px;
-    margin-top: 8px;
+    height: 30px;
+    margin-top: 6px;
   }
   .track-details {
-    margin-bottom: 12px;
+    margin-bottom: 8px;
   }
   .track-title {
     font-size: 1.15rem;
@@ -1512,7 +1715,7 @@ input:checked + .slider-round:before {
     font-size: 0.85rem;
   }
   .player-progress {
-    margin-bottom: 12px;
+    margin-bottom: 8px;
     gap: 8px;
   }
   .player-controls {

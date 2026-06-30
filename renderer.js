@@ -1,4 +1,20 @@
-// Secure escaping helper for metadata inside HTML templates to prevent DOM XSS
+/**
+ * @file renderer.js — Main UI renderer process.
+ *
+ * Responsibilities: library state and IndexedDB persistence, the heuristic
+ * DJ selection engine (Sonic DNA), background processors (Essentia analysis,
+ * album-art repair, file-health), MusicBrainz enrichment, and all dashboard
+ * UI interactions. Audio playback itself lives in audio-renderer.js.
+ *
+ * @license AGPL-3.0-or-later
+ * @copyright 2026 Shane W Watson
+ */
+
+/**
+ * Escape a string for safe interpolation into HTML templates (DOM-XSS guard).
+ * @param {*} str - Any value; null/undefined become an empty string.
+ * @returns {string} HTML-safe text.
+ */
 function escapeHtml(str) {
   if (str === null || str === undefined) return '';
   return String(str)
@@ -16,6 +32,11 @@ let state = {
   history: [],
   mood: 'chill', // default
   customMoodPrompt: '',
+
+  // Lyric Mood AI: "<moodKey>::<path>" → true/false (does the lyric fit?).
+  // In-memory only; rebuilt on demand per mood. moodKey is the mood name, or
+  // "custom::<prompt>" for custom vibes, so verdicts never leak across moods.
+  lyricVerdicts: new Map(),
   currentTrack: null,
   isPlaying: false,
   isScanning: false,
@@ -32,14 +53,6 @@ let state = {
   isDraggingSlider: false,
   currentTime: 0,
   duration: 0
-};
-
-// Target BPM and Key profiles for Moods
-const moodProfiles = {
-  chill: { targetBpm: 75, bpmRange: [50, 95], targetGenres: ['ambient', 'lofi', 'chill', 'acoustic', 'classical', 'jazz', 'downtempo', 'folk'] },
-  focus: { targetBpm: 90, bpmRange: [75, 110], targetGenres: ['instrumental', 'classical', 'lofi', 'ambient', 'synthwave', 'study', 'post-rock', 'minimal'] },
-  energy: { targetBpm: 140, bpmRange: [120, 190], targetGenres: ['rock', 'metal', 'grunge', 'punk', 'techno', 'drum and bass', 'dubstep', 'hardstyle'] },
-  party: { targetBpm: 124, bpmRange: [110, 145], targetGenres: ['dance', 'house', 'funk', 'disco', 'r&b', 'electro', 'pop'] }
 };
 
 // Base64 encoded generic record label to ensure it loads reliably across all systems
@@ -68,6 +81,18 @@ const moodsContainer = document.getElementById('moods-container');
 const customMoodContainer = document.getElementById('custom-mood-container');
 const customMoodInput = document.getElementById('custom-mood-input');
 const btnApplyCustomMood = document.getElementById('btn-apply-custom-mood');
+
+// Lyric Mood AI + crisis support modal
+const lyricAiStatusBadge = document.getElementById('lyric-ai-status-badge');
+const lyricAiProviderSelect = document.getElementById('lyric-ai-provider-select');
+const anthropicConfigFields = document.getElementById('anthropic-config-fields');
+const anthropicKeyInput = document.getElementById('anthropic-key-input');
+const anthropicModelSelect = document.getElementById('anthropic-model-select');
+const btnSaveAiConfig = document.getElementById('btn-save-ai-config');
+const crisisModal = document.getElementById('crisis-modal');
+const btnCrisis988 = document.getElementById('btn-crisis-988');
+const btnCrisisContinue = document.getElementById('btn-crisis-continue');
+const btnCrisisCancel = document.getElementById('btn-crisis-cancel');
 
 const trackTitle = document.getElementById('track-title');
 const trackArtist = document.getElementById('track-artist');
@@ -521,6 +546,10 @@ window.addEventListener('load', async () => {
   // Set up mood selector
   setUpMoodSelector();
 
+  // Set up Lyric Mood AI settings + crisis support modal
+  setUpAiSettings();
+  setUpCrisisModal();
+
   // Set up audio player triggers (UI side)
   setUpAudioPlayerControls();
 
@@ -542,7 +571,12 @@ window.addEventListener('resize', () => {
   canvas.width = canvas.parentElement.clientWidth;
 });
 
-// Helper for UI Console Logs
+/**
+ * Append a line to the on-screen console and mirror it into debug.log.
+ * Auto-scroll only happens when the user is already at the bottom of the log.
+ * @param {string} message - Human-readable message (already user-friendly).
+ * @param {'system'|'info'|'success'|'warning'|'danger'|'ai'} [type='system']
+ */
 function logConsole(message, type = 'system') {
   const line = document.createElement('div');
   line.className = `console-line ${type}`;
@@ -611,6 +645,21 @@ function setUpSettings() {
     const deviceId = e.target.value;
     state.outputDeviceId = deviceId;
     sendAudioCommand('set-output-device', { deviceId });
+  });
+
+  // Internet Metadata enrichment on/off switch
+  toggleEnrichment.addEventListener('change', (e) => {
+    state.isEnrichmentEnabled = e.target.checked;
+    logConsole(`Internet metadata enrichment ${state.isEnrichmentEnabled ? 'enabled' : 'disabled'}.`, 'info');
+    if (state.isEnrichmentEnabled && state.currentTrack) {
+      enrichMetadata(state.currentTrack.artist, state.currentTrack.title);
+    } else if (!state.isEnrichmentEnabled) {
+      enrichmentContent.innerHTML = `
+        <div class="enrichment-placeholder">
+          <p>Internet Metadata is turned off. Flip the switch to pull details from MusicBrainz.</p>
+        </div>
+      `;
+    }
   });
 }
 
@@ -799,6 +848,8 @@ btnStartScan.addEventListener('click', async () => {
     delete track.artCheckedAt;
     delete track.healthCheckedAt;
     delete track.health;
+    // Rescan amnesty: give parked/cooling-down tracks a fresh analysis budget
+    clearAnalysisFailure(track);
 
     // We only clear albumArt if it's NOT a high-quality external URL or long base64 string
     // to give the system a chance to re-fetch/embed it if it was missing or low-res.
@@ -934,13 +985,54 @@ function friendlyError(err, context) {
   if (msg.includes('not active') || msg.includes('not ready')) {
     return 'The audio analysis engine is still warming up — this song will be retried automatically.';
   }
-  if (msg.includes('memory') || msg.includes('abort') || msg.includes('wasm') || msg.includes('out of bounds')) {
+  if (msg.includes('memory') || msg.includes('allocation') || msg.includes('abort') || msg.includes('wasm') || msg.includes('out of bounds')) {
     return 'The analysis engine hit a snag on this song — switching to a simpler method.';
   }
   if (msg.includes('network') || msg.includes('failed to fetch') || msg.includes('offline')) {
-    return 'No internet connection right now — online features will retry later.';
+    // "Failed to fetch" during local analysis is the app-media:// file read failing,
+    // not a network problem. Same if the OS reports we're online.
+    const localContexts = ['essentia-analysis', 'transient-analysis', 'health-check'];
+    if (localContexts.includes(context)) {
+      // For local analysis, "Failed to fetch" is the app-media:// file read
+      // failing — not a network problem.
+      return 'This file could not be read for analysis — it may be locked, moved, or too large.';
+    }
+    if (navigator.onLine === false) {
+      return 'No internet connection right now — online features will retry later.';
+    }
+    // Online, but a genuinely network-bound request (e.g. MusicBrainz art
+    // lookup) failed — the service is unreachable, busy, or rate-limiting.
+    return 'Couldn’t reach the online music database (it may be busy or rate-limiting) — will retry later.';
   }
   return 'Something unexpected went wrong with this song (technical details were saved to debug.log).';
+}
+
+// --- Bounded analysis retries ---
+// A track that repeatedly fails analysis is retried with escalating cooldowns,
+// then permanently parked until the user runs a manual rescan.
+const ANALYSIS_MAX_ATTEMPTS = 3;
+const ANALYSIS_BACKOFF_MS = [60 * 1000, 5 * 60 * 1000, 30 * 60 * 1000];
+const ART_NET_RETRY_MS = 60 * 60 * 1000; // retry failed art fetches in ~1 hour
+
+function recordAnalysisFailure(track, err) {
+  track.analysisFailures = (track.analysisFailures || 0) + 1;
+  const msg = ((err && err.message) ? err.message : String(err)).toLowerCase();
+  const nonRetryable = msg.includes('too large');
+
+  if (nonRetryable || track.analysisFailures >= ANALYSIS_MAX_ATTEMPTS) {
+    track.analysisGaveUp = true;
+    delete track.analysisCooldownUntil;
+    logConsole(`Giving up on analyzing "${track.title}" after ${track.analysisFailures} attempt(s) — a manual rescan will retry it.`, 'warning');
+  } else {
+    const idx = Math.min(track.analysisFailures - 1, ANALYSIS_BACKOFF_MS.length - 1);
+    track.analysisCooldownUntil = Date.now() + ANALYSIS_BACKOFF_MS[idx];
+  }
+}
+
+function clearAnalysisFailure(track) {
+  delete track.analysisFailures;
+  delete track.analysisCooldownUntil;
+  delete track.analysisGaveUp;
 }
 
 /**
@@ -993,7 +1085,7 @@ function isAlbumArtValid(art) {
     if (head.startsWith('RIFF') && head.slice(8, 12) === 'WEBP') return true;    // WebP
     if (head.startsWith('BM')) return true;                                      // BMP
     return false;
-  } catch (e) {
+  } catch {
     return false; // base64 itself is corrupt
   }
 }
@@ -1023,7 +1115,10 @@ async function fetchArtFromMusicBrainz(track) {
   const query = `artist:"${artistClean}" AND recording:"${track.title}"`;
   const url = `https://musicbrainz.org/ws/2/recording/?query=${encodeURIComponent(query)}&fmt=json`;
 
-  const response = await fetch(url, { headers: { 'User-Agent': 'YourOwnPersonalDJ/1.0.0' } });
+  // No custom headers here: a User-Agent on a cross-origin fetch triggers a
+  // CORS preflight the MusicBrainz API rejects. The polite UA is injected at
+  // the session layer in main.js instead.
+  const response = await fetch(url);
   if (!response.ok) return null;
 
   const data = await response.json();
@@ -1096,8 +1191,14 @@ async function backgroundArtProcessor() {
     await dbSaveTrack(track);
   } catch (err) {
     logConsole(`Album art lookup paused: ${friendlyError(err, 'art-repair')}`, 'warning');
-    track.artCheckedAt = Date.now();
-    try { await dbSaveTrack(track); } catch (e) { /* non-fatal */ }
+    const isNetworkErr = /failed to fetch|network/i.test(err.message || '') || navigator.onLine === false;
+    if (isNetworkErr) {
+      // Transient network problem — backdate so retry happens in ~1 hour, not 7 days
+      track.artCheckedAt = Date.now() - ART_RECHECK_MS + ART_NET_RETRY_MS;
+    } else {
+      track.artCheckedAt = Date.now(); // hard failure — full 7-day cooldown
+    }
+    try { await dbSaveTrack(track); } catch { /* non-fatal */ }
   } finally {
     isFetchingArt = false;
   }
@@ -1137,6 +1238,9 @@ async function backgroundHealthProcessor() {
       track.healthCheckedAt = Date.now();
       track.health = 'good';
       if (track.undecodable) {
+        // NOTE: deliberately log-only. Resetting `undecodable` here would
+        // ping-pong with the metadata processor: it re-fails the decode,
+        // re-marks the track, and this branch un-marks it again — forever.
         logConsole(`"${track.title}" couldn't be decoded earlier, but its file structure looks intact — the encoding may simply be unsupported.`, 'info');
       }
       await dbSaveTrack(track);
@@ -1170,7 +1274,10 @@ async function backgroundHealthProcessor() {
       if (result && result.success) {
         track.health = 'repaired';
         track.undecodable = false;
-        // Re-analyze the repaired audio from scratch
+        // Re-analyze the repaired audio from scratch. The file content
+        // changed, so the analysis failure budget resets too (bounded:
+        // healthCheckedAt prevents a second repair cycle).
+        clearAnalysisFailure(track);
         track.bpm = null;
         track.key = null;
         track.mood = null;
@@ -1195,6 +1302,10 @@ async function backgroundHealthProcessor() {
     await dbSaveTrack(track);
   } catch (err) {
     logConsole(`File health check paused: ${friendlyError(err, 'health-check')}`, 'warning');
+    // Mark as checked so a throwing health check doesn't re-run every cycle
+    track.healthCheckedAt = Date.now();
+    track.health = 'unknown';
+    try { await dbSaveTrack(track); } catch { /* non-fatal */ }
   } finally {
     isCheckingHealth = false;
   }
@@ -1211,8 +1322,9 @@ function updateAnalysisProgress() {
 
   const total = state.library.length;
   // A track is "completed" if it has metadata OR is marked as undecodable
+  // OR analysis has permanently given up on it (parked until rescan)
   const completed = state.library.filter(t =>
-    t.undecodable || (
+    t.undecodable || t.analysisGaveUp || (
       t.bpm !== null &&
       t.key !== null &&
       t.mood !== undefined &&
@@ -1238,14 +1350,25 @@ function updateAnalysisProgress() {
   }
 }
 
+/**
+ * Background analysis pipeline (runs on an interval). Picks one unanalyzed
+ * track per tick and fills in: BPM, key, mood, beat offset, loudness, and
+ * ending type via Essentia — with heuristic and transient-detector fallbacks —
+ * then fetches missing album art and writes ID3 tags back to MP3 files.
+ * Guarded by `isProcessingMetadata`; always releases the lock via finally.
+ * @returns {Promise<void>}
+ */
 async function backgroundMetadataProcessor() {
   updateAnalysisProgress();
 
   if (isProcessingMetadata || state.library.length === 0) return;
   
-  // Find a track that hasn't been analyzed and isn't marked as undecodable
+  // Find a track that hasn't been analyzed, isn't marked as undecodable,
+  // isn't permanently parked, and isn't in a failure-backoff cooldown.
   const track = state.library.find(t =>
-    !t.undecodable && (
+    !t.undecodable &&
+    !t.analysisGaveUp &&
+    (!t.analysisCooldownUntil || t.analysisCooldownUntil <= Date.now()) && (
       t.bpm === null ||
       t.key === null ||
       t.mood === undefined ||
@@ -1273,7 +1396,9 @@ async function backgroundMetadataProcessor() {
 
   if (needsAnalysis) {
     let essentiaSuccess = false;
-    
+    let analysisErr = null;
+    let allocFailed = false;
+
     if (track.undecodable) {
       logConsole(`Skipping audio analysis for undecodable track "${track.title}" (using heuristics)`, 'info');
     } else if (aiWorker) {
@@ -1301,6 +1426,8 @@ async function backgroundMetadataProcessor() {
         logConsole(`Essentia analyzed "${track.title}": BPM ${bpm}, Key ${key}, Mood ${mood} (beat offset ${beatOffset}s)`, 'ai');
       } catch (err) {
         logConsole(`Couldn't fully analyze "${track.title}": ${friendlyError(err, 'essentia-analysis')}`, 'warning');
+        analysisErr = err;
+        allocFailed = /allocation|out of memory/i.test(err.message);
         // Mark as undecodable so we don't get stuck on this file in the background processor
         if (err.message.includes('decoding failed') || err.message.includes('decode')) {
           track.undecodable = true;
@@ -1322,7 +1449,8 @@ async function backgroundMetadataProcessor() {
     // 3. If beat offset is still missing (Essentia unavailable), use the
     //    built-in Web Audio transient detector as a last resort.
     if (beatOffset === undefined || beatOffset === null) {
-      if (track.undecodable) {
+      if (track.undecodable || allocFailed) {
+        // Under memory pressure, don't fetch+decode the whole file a second time
         beatOffset = 0;
       } else {
         logConsole(`Running fallback transient beat detection for "${track.title}"...`, 'info');
@@ -1334,6 +1462,7 @@ async function backgroundMetadataProcessor() {
           }
         } catch (err) {
           logConsole(`Beat detection didn't work for "${track.title}": ${friendlyError(err, 'transient-analysis')}`, 'warning');
+          analysisErr = analysisErr || err;
           if (err.message.includes('decoding failed') || err.message.includes('decode')) {
             track.undecodable = true;
           }
@@ -1344,12 +1473,16 @@ async function backgroundMetadataProcessor() {
 
     if (markedHeuristic) {
       track.isHeuristic = true;
-      // Ensure loudness is set even if analysis failed to prevent loop hangs
-      if (track.loudness === undefined || track.loudness === null) {
-        track.loudness = 0.10; // Default neutral loudness
-      }
     } else {
       delete track.isHeuristic;
+    }
+
+    // Track repeated failures so a bad file is retried with backoff and
+    // eventually parked instead of looping every tick.
+    if (analysisErr) {
+      recordAnalysisFailure(track, analysisErr);
+    } else if (essentiaSuccess) {
+      clearAnalysisFailure(track);
     }
   }
 
@@ -1359,13 +1492,21 @@ async function backgroundMetadataProcessor() {
   track.mood = mood;
   track.beatOffset = beatOffset;
 
+  // Loudness must always end up set — Essentia can succeed yet return no rms,
+  // and sanitizeLibraryTrack nulls non-positive values on load. A null here
+  // re-selects the track every tick forever.
+  if (track.loudness === undefined || track.loudness === null || track.loudness <= 0) {
+    track.loudness = 0.10; // Default neutral loudness
+  }
+
   // If the ending couldn't be inspected (decode failed), assume a normal
   // fade-out so the DJ keeps its default crossfade behavior.
   if (track.endingCold === undefined) track.endingCold = false;
   
-  // 4. Background Album Art Fetching (if missing or corrupt)
+  // 4. Background Album Art Fetching (if missing or corrupt, and not cooling down)
   let artworkToEmbed = null;
-  if (!isAlbumArtValid(track.albumArt)) {
+  if (!isAlbumArtValid(track.albumArt) &&
+      (!track.artCheckedAt || (Date.now() - track.artCheckedAt) > ART_RECHECK_MS)) {
     try {
       logConsole(`Fetching ${track.albumArt ? 'replacement' : 'missing'} album art for "${track.title}" from MusicBrainz...`, 'info');
       track.albumArt = null; // drop corrupt data so the protocol fallback works meanwhile
@@ -1381,6 +1522,8 @@ async function backgroundMetadataProcessor() {
     } catch (err) {
       console.warn(`Art fetch failed for ${track.title}:`, err);
       if (window.api.logDebug) window.api.logDebug(`[art-fetch] ${track.title}: ${err.message}`);
+      // Backdate so the fetch becomes eligible again in ~1 hour, not every tick
+      track.artCheckedAt = Date.now() - ART_RECHECK_MS + ART_NET_RETRY_MS;
     }
   }
 
@@ -1415,6 +1558,10 @@ async function backgroundMetadataProcessor() {
   } catch (err) {
     console.error('Background metadata processor error:', err);
     logConsole(`Background analysis error for a track: ${err.message}`, 'danger');
+    // Errors that escape the inner handlers must also count toward the
+    // retry budget, or this track loops every tick.
+    recordAnalysisFailure(track, err);
+    try { await dbSaveTrack(track); } catch (saveErr) { console.error('Failed to persist failure state:', saveErr); }
   } finally {
     // Always release the lock so one bad track can't halt the whole pipeline
     isProcessingMetadata = false;
@@ -1477,6 +1624,240 @@ function tryQueueOptimization(newTrack) {
   }
 }
 
+// --- Lyric Mood AI (Anthropic) ---------------------------------------------
+// When configured with an API key (Settings), songs with embedded lyrics are
+// judged by Claude against the active mood — especially custom vibes. Verdicts
+// are cached per (mood, track) for the session. Tracks without lyrics keep
+// using the sonic/keyword pipeline unchanged.
+
+let aiStatus = { provider: 'local', configured: false, model: null, localModelReady: false, downloading: false };
+let lyricAnalysisToken = 0; // invalidates in-flight runs when the mood changes
+
+const MOOD_LYRIC_DESCRIPTIONS = {
+  chill: 'calm, relaxed, mellow, soothing — easygoing themes, nothing aggressive or emotionally heavy',
+  focus: 'steady and unobtrusive, suitable for deep concentration or studying — no jarring or distressing themes',
+  energy: 'high energy, intense, driving, motivating — themes of power, speed, adrenaline, or determination',
+  party: 'fun, celebratory, danceable, feel-good — themes of partying, dancing, friends, and good times',
+  // Uplifting is about lyrical content and overall feel, NOT tempo or loudness.
+  // A quiet hymn can be uplifting; a loud aggressive track is not.
+  uplifting: 'positive, hopeful, encouraging, inspiring — themes of hope, triumph, faith, gratitude, perseverance, love, or joy that leave the listener feeling lifted and reassured, regardless of how fast or loud the music is. Angry, bleak, despairing, or purely aggressive lyrics do NOT fit, even at high energy.',
+};
+
+/** Cache key prefix for the currently active mood (custom prompts get their own space). */
+function lyricMoodKey() {
+  return state.mood === 'custom' ? `custom::${state.customMoodPrompt}` : state.mood;
+}
+
+function lyricMoodDescription() {
+  return state.mood === 'custom'
+    ? state.customMoodPrompt
+    : (MOOD_LYRIC_DESCRIPTIONS[state.mood] || null);
+}
+
+/** @returns {boolean|undefined} true/false when Claude has judged this track for the active mood. */
+function getLyricVerdict(track) {
+  return state.lyricVerdicts.get(`${lyricMoodKey()}::${track.path}`);
+}
+
+async function refreshAiStatus() {
+  try {
+    aiStatus = await window.api.aiGetStatus();
+  } catch {
+    aiStatus = { provider: 'local', configured: false, model: null, localModelReady: false, downloading: false };
+  }
+  updateAiSettingsUI();
+}
+
+function updateAiSettingsUI() {
+  if (!lyricAiStatusBadge) return;
+  if (aiStatus.downloading) {
+    lyricAiStatusBadge.innerText = 'Downloading…';
+  } else if (!aiStatus.configured) {
+    lyricAiStatusBadge.innerText = aiStatus.provider === 'local' ? 'Needs download' : 'Needs key';
+  } else {
+    lyricAiStatusBadge.innerText = aiStatus.provider === 'local' ? 'Local' : 'Claude';
+  }
+  if (lyricAiProviderSelect) lyricAiProviderSelect.value = aiStatus.provider;
+  if (aiStatus.model && anthropicModelSelect) anthropicModelSelect.value = aiStatus.model;
+  if (anthropicConfigFields) {
+    anthropicConfigFields.style.display = aiStatus.provider === 'anthropic' ? 'flex' : 'none';
+  }
+}
+
+/**
+ * Ask Claude (via the main process) whether each lyric-bearing track fits the
+ * active mood, then refresh the queue so verdicts take effect. No-op without
+ * an API key. Re-entrant safe: a mood change mid-flight discards stale results.
+ */
+async function runLyricMoodAnalysis() {
+  if (!aiStatus.configured || state.library.length === 0) return;
+  const moodKey = lyricMoodKey();
+  const description = lyricMoodDescription();
+  if (!description) return;
+
+  const pending = state.library.filter(t => !state.lyricVerdicts.has(`${moodKey}::${t.path}`));
+  if (pending.length === 0) return;
+
+  const token = ++lyricAnalysisToken;
+  logConsole(`Lyric AI: judging lyrics against "${description}"...`, 'ai');
+
+  let response;
+  try {
+    response = await window.api.aiAnalyzeLyrics({
+      tracks: pending.map(t => ({ path: t.path, title: t.title, artist: t.artist })),
+      moodDescription: description,
+      moodKey,
+    });
+  } catch (err) {
+    logConsole(`Lyric AI failed: ${friendlyError(err, 'lyric-ai')}`, 'warning');
+    return;
+  }
+
+  if (response.error === 'invalid-api-key') {
+    logConsole('Lyric AI: the API key was rejected — check Settings.', 'danger');
+    return;
+  }
+  if (response.error === 'model-downloading') {
+    logConsole('Lyric AI: the local model is still downloading — lyrics will be judged once it finishes.', 'info');
+    return;
+  }
+  if (response.error === 'model-not-ready') {
+    logConsole('Lyric AI: local model not downloaded yet — open Settings and hit Save to fetch it (~1 GB, one time).', 'warning');
+    return;
+  }
+  if (response.error === 'rate-limited') {
+    logConsole('Lyric AI: rate limited by the API — applying partial results.', 'warning');
+  }
+
+  for (const r of (response.results || [])) {
+    state.lyricVerdicts.set(`${moodKey}::${r.path}`, r.fits);
+  }
+
+  // Mood changed while we were waiting — keep the cache, skip the refill.
+  if (token !== lyricAnalysisToken || moodKey !== lyricMoodKey()) return;
+
+  if (response.analyzed > 0) {
+    const fitCount = (response.results || []).filter(r => r.fits).length;
+    logConsole(`Lyric AI: ${fitCount}/${response.analyzed} lyric-bearing songs fit this vibe (${response.skippedNoLyrics} without lyrics use the sonic engine).`, 'ai');
+    state.queue = [];
+    fillQueue();
+  }
+}
+
+function setUpAiSettings() {
+  refreshAiStatus();
+
+  // Show/hide the Claude fields live as the provider dropdown changes
+  lyricAiProviderSelect.addEventListener('change', () => {
+    anthropicConfigFields.style.display =
+      lyricAiProviderSelect.value === 'anthropic' ? 'flex' : 'none';
+  });
+
+  btnSaveAiConfig.addEventListener('click', async () => {
+    const config = { provider: lyricAiProviderSelect.value };
+    if (config.provider === 'anthropic') {
+      config.model = anthropicModelSelect.value;
+      const apiKey = anthropicKeyInput.value.trim();
+      if (apiKey) config.apiKey = apiKey; // blank field = keep the stored key
+    }
+    const result = await window.api.aiSetConfig(config);
+    if (result && result.ok) {
+      aiStatus = result;
+      anthropicKeyInput.value = '';
+      updateAiSettingsUI();
+      if (aiStatus.configured) {
+        logConsole(`Lyric Mood AI enabled (${aiStatus.provider === 'local' ? 'local model — private, no cost' : aiStatus.model}).`, 'info');
+        runLyricMoodAnalysis();
+      } else if (aiStatus.provider === 'local') {
+        logConsole('Lyric Mood AI: downloading the local model (~1 GB, one time)...', 'info');
+      } else {
+        logConsole('Lyric Mood AI: no API key set yet.', 'info');
+      }
+    } else {
+      logConsole(`Couldn't save Lyric AI settings: ${(result && result.error) || 'unknown error'}`, 'warning');
+    }
+  });
+
+  window.api.onAiAnalyzeProgress(({ done, total }) => {
+    logConsole(`Lyric AI: ${done}/${total} songs checked...`, 'ai');
+  });
+
+  let lastLoggedPct = -10;
+  window.api.onAiModelDownloadProgress((data) => {
+    if (data.error) {
+      aiStatus.downloading = false;
+      updateAiSettingsUI();
+      logConsole(`Lyric AI model download failed: ${data.error}`, 'warning');
+      return;
+    }
+    if (data.done) {
+      lastLoggedPct = -10;
+      refreshAiStatus().then(() => {
+        logConsole('Lyric AI: local model ready — lyrics now stay 100% on this PC.', 'ai');
+        runLyricMoodAnalysis();
+      });
+      return;
+    }
+    aiStatus.downloading = true;
+    if (lyricAiStatusBadge) lyricAiStatusBadge.innerText = `Downloading ${data.pct}%`;
+    if (data.pct >= lastLoggedPct + 10) { // log every ~10% to avoid console spam
+      lastLoggedPct = data.pct;
+      logConsole(`Lyric AI: downloading local model... ${data.pct}%`, 'info');
+    }
+  });
+}
+
+// --- Crisis support guardrail ------------------------------------------------
+// Runs locally on the custom mood prompt — nothing is sent anywhere to detect
+// this. The request is honored either way; we just make sure help info is seen
+// first. Patterns target suicide/self-harm phrasing, not general sad themes.
+
+const CRISIS_PATTERNS = [
+  /suicid/i,
+  /self[\s-]?harm/i,
+  /self[\s-]?injur/i,
+  /kill(ing)?\s+(myself|me|yourself|himself|herself|themselves)/i,
+  /end(ing)?\s+(my|your|it)\s*(all|life)/i,
+  /take\s+my\s+(own\s+)?life/i,
+  /want(ing)?\s+to\s+die/i,
+  /wanna\s+die/i,
+  /wish\s+i\s+(was|were)\s+dead/i,
+  /better\s+off\s+dead/i,
+  /no\s+reason\s+to\s+live/i,
+  /cut(ting)?\s+(myself|my\s+(arms?|wrists?|legs?))/i,
+  /hurt(ing)?\s+myself/i,
+  /overdos/i,
+  /unaliv/i,
+];
+
+function detectCrisisContent(text) {
+  return CRISIS_PATTERNS.some(re => re.test(text));
+}
+
+let crisisContinueAction = null;
+
+/** Show the support modal; [onContinue] runs only if the user chooses to proceed. */
+function showCrisisModal(onContinue) {
+  crisisContinueAction = onContinue;
+  crisisModal.classList.remove('hidden');
+}
+
+function setUpCrisisModal() {
+  btnCrisisContinue.addEventListener('click', () => {
+    crisisModal.classList.add('hidden');
+    const action = crisisContinueAction;
+    crisisContinueAction = null;
+    if (action) action();
+  });
+  btnCrisisCancel.addEventListener('click', () => {
+    crisisModal.classList.add('hidden');
+    crisisContinueAction = null;
+  });
+  btnCrisis988.addEventListener('click', () => {
+    window.api.openExternal('https://988lifeline.org');
+  });
+}
+
 // --- Sonic DNA Framework ---
 // This framework groups music into "Vibe Tiers" to prevent Contextual Whiplash.
 const SONIC_PROFILES = {
@@ -1495,7 +1876,10 @@ const SONIC_PROFILES = {
   CLASSIC_POP: {
     artists: ['the police', 'kansas', 'u2', 'r.e.m.', 'talking heads', 'dire straits', 'fleetwood mac', 'bryan duncan', 'vigilantes of love', 'blue oyster cult', 'b.o.c.', 'little richard', 'smalltown poets'],
     keywords: ['new wave', 'pop rock', 'classic rock', 'every breath', 'gold', 'heart', 'day'],
-    allowedMoods: ['uplifting', 'energy'],
+    // 'uplifting' is intentionally NOT here: it is a lyric/feel judgment, not a
+    // sonic-energy one (see doesTrackMatchMood's dedicated uplifting branch).
+    // Coupling it with 'energy' is what put aggressive rock next to gentle hymns.
+    allowedMoods: ['energy'],
     compatibility: ['STEADY_CCM', 'CLASSIC_POP', 'DRIVING_ALT']
   },
   DRIVING_ALT: {
@@ -1531,7 +1915,10 @@ const SONIC_PROFILES = {
   TRADITIONAL: {
     artists: ['folk like us', 'benny goodman', 'vivaldi', 'sibelius', 'london philharmonic', 'carola'],
     keywords: ['jig', 'reel', 'polka', 'hornpipe', 'swing', 'big band', 'spring', 'four seasons', 'allegro', 'finlandia', 'carol'],
-    allowedMoods: ['party', 'uplifting'],
+    // 'party' is intentionally NOT a blanket mood here: only fast trad (>130 BPM
+    // jigs/reels/swing) qualifies, via the elasticity rule in doesTrackMatchMood.
+    // Blanket 'party' put 98-BPM blues/country-tagged rock next to club tracks.
+    allowedMoods: ['uplifting'],
     compatibility: ['TRADITIONAL', 'CLASSIC_POP']
   }
 };
@@ -1544,7 +1931,7 @@ function wordMatch(text, term) {
   try {
     const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return new RegExp('\\b' + escaped + '\\b', 'i').test(text);
-  } catch (e) {
+  } catch {
     return text.includes(term);
   }
 }
@@ -1589,6 +1976,10 @@ function getSonicProfile(track) {
       foundKey = 'STEADY_CCM';
     } else if (wordMatch(text, 'folk') || wordMatch(text, 'acoustic') || wordMatch(text, 'singer-songwriter') || wordMatch(text, 'ambient') || wordMatch(text, 'new age')) {
       foundKey = 'INTIMATE';
+    } else if (wordMatch(text, 'southern rock') || wordMatch(text, 'blues rock') || wordMatch(text, 'blues-rock') || wordMatch(text, 'rock and roll') || wordMatch(text, 'rock & roll') || wordMatch(text, "rock 'n' roll")) {
+      // Rock hybrids stay rock — a bare 'blues'/'country' match below would
+      // misfile them as TRADITIONAL (e.g. Lynyrd Skynyrd next to club tracks).
+      foundKey = 'CLASSIC_POP';
     } else if (wordMatch(text, 'jazz') || wordMatch(text, 'blues') || wordMatch(text, 'swing') || wordMatch(text, 'big band') || wordMatch(text, 'classical') || wordMatch(text, 'orchestral')) {
       foundKey = 'TRADITIONAL';
     } else if (wordMatch(text, 'punk') || wordMatch(text, 'alternative') || wordMatch(text, 'alt-rock') || wordMatch(text, 'emo') || wordMatch(text, 'country rock')) {
@@ -1606,13 +1997,24 @@ function getSonicProfile(track) {
   return foundKey;
 }
 
+/**
+ * Decide whether a track fits the requested mood, using its Sonic DNA
+ * profile plus BPM-based elasticity rules for adjacent styles.
+ * @param {object} track - Library track.
+ * @param {string} mood - Active mood
+ *   ('chill'|'focus'|'energy'|'party'|'uplifting'|'custom').
+ * @returns {boolean}
+ */
 function doesTrackMatchMood(track, mood) {
   if (!track) return false;
   const sMood = mood.toLowerCase();
 
-  // Custom mood uses keyword search instead of profile DNA
+  // Custom mood: a Claude lyric verdict (when available) is authoritative;
+  // tracks without lyrics or before analysis completes fall back to keyword search.
   if (sMood === 'custom') {
     if (!state.customMoodPrompt) return true;
+    const lyricVerdict = getLyricVerdict(track);
+    if (lyricVerdict !== undefined) return lyricVerdict;
     const promptWords = state.customMoodPrompt.toLowerCase().split(' ');
     const searchArea = `${track.title} ${track.artist} ${track.genre} ${track.mood || ''}`.toLowerCase();
     return promptWords.some(w => w.length > 2 && searchArea.includes(w));
@@ -1620,6 +2022,19 @@ function doesTrackMatchMood(track, mood) {
 
   const profileKey = getSonicProfile(track);
   const profile = SONIC_PROFILES[profileKey];
+
+  // Uplifting is a lyric/feel mood, deliberately independent of the sonic
+  // energy path. The Lyric AI verdict is authoritative when available. Without
+  // it (no lyrics, AI off, or analysis pending) we fall back conservatively:
+  // only warm, non-aggressive profiles in a major key — we never *assume* loud
+  // or aggressive music is uplifting just because it's energetic.
+  if (sMood === 'uplifting') {
+    const lyricVerdict = getLyricVerdict(track);
+    if (lyricVerdict !== undefined) return lyricVerdict;
+    const UPLIFTING_FALLBACK_PROFILES = ['INTIMATE', 'STEADY_CCM', 'TRADITIONAL', 'CLASSIC_POP'];
+    if (!UPLIFTING_FALLBACK_PROFILES.includes(profileKey)) return false;
+    return !(track.key || '').toLowerCase().includes('min'); // major key only
+  }
 
   // Rule: Profile must explicitly allow the mood
   if (profile.allowedMoods.includes(sMood)) return true;
@@ -1666,11 +2081,13 @@ function isArtistAllowed(artist) {
   });
   if (inQueue) return false;
 
-  // Block if played 2+ times in the last 20 minutes
+  // Block if the artist played at all within the rolling 20-minute window.
+  // (The old threshold of "2+ plays" let an artist return after only ~3
+  // songs: one play didn't trip the cooldown, and only the current-track
+  // and 3-slot queue checks stood in the way.)
   const twentyMin = 20 * 60 * 1000;
   const cutoff = Date.now() - twentyMin;
-  const recentCount = state.history.filter(h => getPrimaryArtist(h.artist) === primary && h.playedAt > cutoff).length;
-  return recentCount < 2;
+  return !state.history.some(h => getPrimaryArtist(h.artist) === primary && h.playedAt > cutoff);
 }
 
 function isSongAllowed(path) {
@@ -1705,9 +2122,25 @@ async function fillQueue() {
   renderQueue();
 }
 
+/**
+ * The DJ brain: pick the next track using a nine-tier candidate funnel that
+ * progressively relaxes constraints (mood DNA → cooldowns → genre
+ * compatibility) so a song is always found, then weights the final pick by
+ * heuristic score.
+ * @returns {Promise<{path: string, reason: string}|null>} Queue entry, or
+ *   null when the library is empty.
+ */
 async function getNextDJTrack() {
   const mood = state.mood;
-  const currentTrack = state.currentTrack;
+  // Compare transitions against the track this pick will actually follow:
+  // the tail of the queue when refilling several slots at once, falling back
+  // to the playing track. Comparing every pick against the playing track let
+  // mutually-incompatible tracks (e.g. TRADITIONAL between DANCE_FLOOR and
+  // BIG_BEAT) land side by side in the queue.
+  const queueTail = state.queue.length > 0
+    ? state.library.find(t => t.path === state.queue[state.queue.length - 1].path)
+    : null;
+  const currentTrack = queueTail || state.currentTrack;
 
   // Pre-filter library to valid candidates for this mood to save time
   const moodCandidates = state.library.filter(t => doesTrackMatchMood(t, mood));
@@ -1735,10 +2168,8 @@ async function getNextDJTrack() {
     });
   };
 
-  let candidates = [];
-
   // Tier 1: Perfect DNA match (Analyzed, Cooldowns, Compatible)
-  candidates = getCandidates(true, true, true);
+  let candidates = getCandidates(true, true, true);
 
   // Tier 2: Vibe match (Any, Cooldowns, Compatible)
   if (candidates.length === 0) candidates = getCandidates(false, true, true);
@@ -1784,7 +2215,7 @@ async function getNextDJTrack() {
 
   const scoredCandidates = candidates.map(c => ({
     track: c,
-    score: getHeuristicScore(c, currentBpm, currentGenre, currentKey)
+    score: getHeuristicScore(c, currentBpm, currentGenre, currentKey, currentTrack)
   }));
 
   const best = weightedRandomPick(scoredCandidates);
@@ -1801,7 +2232,19 @@ async function getNextDJTrack() {
   return { path: best.path, reason };
 }
 
-function getHeuristicScore(track, currentBpm, currentGenre, currentKey) {
+/**
+ * Score a candidate track for transition quality against the current track:
+ * mood match, genre-tier compatibility, BPM proximity, harmonic key,
+ * major/minor continuity, loudness-contrast guardrails, and repeat penalties.
+ * @param {object} track - Candidate track.
+ * @param {number} currentBpm - BPM of the reference track (or 100 default).
+ * @param {string} currentGenre - Genre of the reference track.
+ * @param {string} currentKey - Musical key of the reference track.
+ * @param {object} [referenceTrack] - The track the candidate would follow
+ *   (queue tail during refills); defaults to the playing track.
+ * @returns {number} Score (higher = better transition).
+ */
+function getHeuristicScore(track, currentBpm, currentGenre, currentKey, referenceTrack = state.currentTrack) {
   let score = 0;
   
   // 1. Mood Matching (Primary Factor)
@@ -1813,6 +2256,11 @@ function getHeuristicScore(track, currentBpm, currentGenre, currentKey) {
       if (w.length > 2 && searchArea.includes(w)) matches++;
     });
     score += matches * 100;
+
+    // Claude lyric verdict dominates keyword hits when present
+    const lyricVerdict = getLyricVerdict(track);
+    if (lyricVerdict === true) score += 400;
+    else if (lyricVerdict === false) score -= 400;
   } else {
     // Stricter checking for the active mood
     const isMoodMatch = doesTrackMatchMood(track, state.mood);
@@ -1835,13 +2283,21 @@ function getHeuristicScore(track, currentBpm, currentGenre, currentKey) {
         score += 150;
       } else if (state.mood === 'party' && (tMood.includes('dance') || tMood.includes('groove') || tMood.includes('funky') || tMood.includes('upbeat') || tMood.includes('club'))) {
         score += 150;
+      } else if (state.mood === 'uplifting' && (tMood.includes('uplift') || tMood.includes('hopeful') || tMood.includes('triumph') || tMood.includes('worship') || tMood.includes('praise') || tMood.includes('inspir') || tMood.includes('joy'))) {
+        score += 150;
       }
     }
+
+    // Claude lyric verdict for standard moods: a scoring signal, not a gate —
+    // sonics still decide candidacy, lyrics nudge the pick.
+    const lyricVerdict = getLyricVerdict(track);
+    if (lyricVerdict === true) score += 150;
+    else if (lyricVerdict === false) score -= 150;
   }
 
   // 2. Transitions, BPM, and Key (Secondary Factors)
-  if (state.currentTrack) {
-    if (areGenresCompatible(currentGenre, track.genre, state.currentTrack, track)) {
+  if (referenceTrack) {
+    if (areGenresCompatible(currentGenre, track.genre, referenceTrack, track)) {
       score += 10;
     } else {
       score -= 250; // Heavily penalize incompatible genre transitions
@@ -1870,7 +2326,7 @@ function getHeuristicScore(track, currentBpm, currentGenre, currentKey) {
 
     // 4. Dynamic Contrast Guardrail (prevent Energy to Sparse jumps)
     // If outgoing track was loud/energetic, avoid tracks known to have quiet intros.
-    const currentLoudness = state.currentTrack?.loudness || 0.15;
+    const currentLoudness = referenceTrack?.loudness || 0.15;
     const isNextPianoLed = (track.title || '').toLowerCase().includes('piano') ||
                            (track.genre || '').toLowerCase().includes('ballad') ||
                            ['barlowgirl', 'leigh nash', 'lenny leblanc'].some(a => (track.artist || '').toLowerCase().includes(a));
@@ -1895,15 +2351,20 @@ function getHeuristicScore(track, currentBpm, currentGenre, currentKey) {
     }
   }
 
-  // (b) Artist Repeat Penalty: penalize up to -100 points for artist plays within 20 minutes
+  // (b) Artist Repeat Penalty: heavily penalize artist plays within the same
+  // rolling 20 minutes (up to -250, decaying). This is the backstop for the
+  // fallback tiers that drop the hard isArtistAllowed check on small
+  // libraries — a repeat should be a last resort, not a 3-song cycle.
+  // Compare by primary artist so "X feat. Y" still counts as X.
   if (track.artist && track.artist !== 'Unknown Artist') {
-    const recentArtistPlays = state.history.filter(h => h.artist === track.artist);
+    const primary = getPrimaryArtist(track.artist);
+    const recentArtistPlays = state.history.filter(h => getPrimaryArtist(h.artist) === primary);
     if (recentArtistPlays.length > 0) {
       const lastPlayed = Math.max(...recentArtistPlays.map(h => h.playedAt));
       const timeSincePlayed = now - lastPlayed;
       const twentyMin = 20 * 60 * 1000;
       if (timeSincePlayed < twentyMin) {
-        const penalty = -100 * (1 - (timeSincePlayed / twentyMin));
+        const penalty = -250 * (1 - (timeSincePlayed / twentyMin));
         score += penalty;
       }
     }
@@ -1995,6 +2456,7 @@ function setUpMoodSelector() {
         logConsole(`Mood changed to: ${state.mood}`, 'info');
         state.queue = [];
         fillQueue();
+        runLyricMoodAnalysis();
       }
     });
   });
@@ -2002,10 +2464,22 @@ function setUpMoodSelector() {
   btnApplyCustomMood.addEventListener('click', () => {
     const prompt = customMoodInput.value.trim();
     if (!prompt) return;
-    state.customMoodPrompt = prompt;
-    logConsole(`Custom mood applied: "${prompt}"`, 'info');
-    state.queue = [];
-    fillQueue();
+
+    const applyVibe = () => {
+      state.customMoodPrompt = prompt;
+      logConsole(`Custom mood applied: "${prompt}"`, 'info');
+      state.queue = [];
+      fillQueue();
+      runLyricMoodAnalysis();
+    };
+
+    // Local-only screen: if the vibe touches on suicide/self-harm, surface
+    // crisis resources first. The request is still honored on Continue.
+    if (detectCrisisContent(prompt)) {
+      showCrisisModal(applyVibe);
+    } else {
+      applyVibe();
+    }
   });
 
   customMoodInput.addEventListener('keydown', (e) => {
@@ -2326,11 +2800,9 @@ async function enrichMetadata(artist, title) {
     const query = `artist:"${artistClean}" AND recording:"${title}"`;
     const url = `https://musicbrainz.org/ws/2/recording/?query=${encodeURIComponent(query)}&fmt=json`;
     
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'YourOwnPersonalDJ/1.0.0 ( werisetech@gmail.com )'
-      }
-    });
+    // UA is injected at the session layer (main.js); setting it here would
+    // force a CORS preflight that MusicBrainz rejects.
+    const response = await fetch(url);
 
     if (!response.ok) throw new Error('MusicBrainz response was not ok');
 
@@ -2429,6 +2901,13 @@ async function enrichMetadata(artist, title) {
   }
 }
 
+/**
+ * Strip a leading ID3v2 tag block from an audio buffer, which trips up
+ * decodeAudioData on some files. Returns the original buffer when no valid
+ * tag is present.
+ * @param {ArrayBuffer} arrayBuffer - Raw file bytes.
+ * @returns {ArrayBuffer}
+ */
 function stripId3v2(arrayBuffer) {
   const uint8 = new Uint8Array(arrayBuffer);
   // Check if it starts with "ID3" (hex: 49 44 33)
@@ -2465,8 +2944,14 @@ function normalizePath(filePath) {
   return normalized;
 }
 
-// Repair corrupted metadata values that may have been stored in IndexedDB by
-// earlier versions of the app (before scan-time sanitization was added).
+/**
+ * Repair corrupted metadata values that may have been stored in IndexedDB by
+ * earlier versions of the app (before scan-time sanitization was added):
+ * BPM range, key format, text fields, genre dumps, album art validity,
+ * ReplayGain bounds, and loudness bounds.
+ * @param {object} track - Track as loaded from IndexedDB (mutated in place).
+ * @returns {object} The same track, sanitized.
+ */
 function sanitizeLibraryTrack(track) {
   // BPM: must be a whole number in a realistic musical range
   if (track.bpm !== null && track.bpm !== undefined) {
@@ -2556,29 +3041,51 @@ function createFreshAudioCtx() {
 }
 
 // Safe wrapper around decodeAudioData that falls back to the original buffer if the tag-stripped buffer fails.
+// No backup copy is needed: stripId3v2 returns a DISTINCT buffer when a tag exists
+// (so the original is never detached by the first decode), and when no tag exists
+// a fallback decode of identical bytes would fail identically anyway.
 async function decodeAudioDataWithFallback(arrayBuffer) {
   const ctx = createFreshAudioCtx(); // fresh every time
-  const backupBuffer = arrayBuffer.slice(0); // retain backup before first decode detaches the buffer
+  const cleanBuffer = stripId3v2(arrayBuffer);
+
+  if (cleanBuffer === arrayBuffer) {
+    // No ID3 tag — single attempt, nothing different to fall back to
+    return await ctx.decodeAudioData(arrayBuffer);
+  }
 
   try {
-    const cleanBuffer = stripId3v2(arrayBuffer);
     return await ctx.decodeAudioData(cleanBuffer);
   } catch (stripErr) {
+    // Under memory pressure a second full decode only makes things worse
+    if (/allocation|out of memory/i.test(stripErr.message || '')) throw stripErr;
     console.warn('Tag-stripped decode failed; falling back to original buffer...', stripErr);
     const ctx2 = createFreshAudioCtx(); // fresh again — don't reuse a context that already errored
-    return await ctx2.decodeAudioData(backupBuffer);
+    return await ctx2.decodeAudioData(arrayBuffer);
   }
 }
 
-// Decode an audio file to a mono Float32Array at 44100 Hz for Essentia analysis.
-// Decoding uses OfflineAudioContext (renderer-only); the resulting samples are
-// then transferred to the Essentia worker.
+// Files above this size are skipped by analysis (decoded PCM would be several
+// GB); they get heuristic metadata instead.
+const MAX_ANALYSIS_FILE_BYTES = 100 * 1024 * 1024;
+
+/**
+ * Decode an audio file to a mono Float32Array for Essentia analysis.
+ * Decoding uses OfflineAudioContext (renderer-only); the resulting samples
+ * are then transferred (zero-copy) to the Essentia worker.
+ * @param {string} trackPath - Absolute path of the audio file.
+ * @returns {Promise<{samples: Float32Array, sampleRate: number}>}
+ * @throws {Error} When the file cannot be fetched or decoded.
+ */
 async function decodeTrackToMono(trackPath) {
   const secureUrl = 'app-media:///' + trackPath.replace(/\\/g, '/');
   const response = await fetch(secureUrl);
   if (!response.ok) throw new Error(`Fetch failed with status ${response.status}`);
 
   const arrayBuffer = await response.arrayBuffer();
+  if (arrayBuffer.byteLength > MAX_ANALYSIS_FILE_BYTES) {
+    // "too large" routes through recordAnalysisFailure as non-retryable
+    throw new Error(`file too large for analysis (${Math.round(arrayBuffer.byteLength / 1024 / 1024)} MB)`);
+  }
   const audioBuffer = await decodeAudioDataWithFallback(arrayBuffer);
 
   const sampleRate = audioBuffer.sampleRate;
@@ -2600,7 +3107,15 @@ async function decodeTrackToMono(trackPath) {
   return { samples: mono, sampleRate };
 }
 
-// Transient detection helper (fallback beat detector)
+/**
+ * Fallback beat detector: Web Audio envelope peak analysis used when
+ * Essentia is unavailable. Estimates BPM (if unknown) and the downbeat
+ * offset by scoring candidate beat-grid phases against detected transients.
+ * @param {string} trackPath - Absolute path of the audio file.
+ * @param {number|null} knownBpm - BPM from tags/Essentia, if already known.
+ * @returns {Promise<{bpm: number, beatOffset: number}>}
+ * @throws {Error} When the file cannot be fetched or decoded.
+ */
 async function runTransientAnalysis(trackPath, knownBpm) {
   const secureUrl = 'app-media:///' + trackPath.replace(/\\/g, '/');
   const response = await fetch(secureUrl);
