@@ -16,7 +16,7 @@
     "essentia.js": "^0.1.3",
     "music-metadata": "^11.13.0",
     "node-id3": "^0.2.9",
-    "node-llama-cpp": "^3.18.1"
+    "node-llama-cpp": "^3.19.0"
   },
   "devDependencies": {
     "@electron/packager": "^20.0.1",
