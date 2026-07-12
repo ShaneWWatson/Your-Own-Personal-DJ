@@ -105,6 +105,19 @@ function sendEvent(event, data = {}) {
     window.api.sendFromAudio({ event, data });
 }
 
+/**
+ * Build an app-media:// URL for an absolute file path on any platform.
+ * Windows:      C:\Music\a.mp3  → app-media:///C:/Music/a.mp3
+ * macOS/Linux:  /Users/me/a.mp3 → app-media:///Users/me/a.mp3
+ * (Kept in sync with the copy in renderer.js.)
+ * @param {string} filePath - Absolute path of the media file.
+ * @returns {string}
+ */
+function mediaUrlForPath(filePath) {
+    const forward = filePath.replace(/\\/g, '/');
+    return 'app-media://' + (forward.startsWith('/') ? '' : '/') + forward;
+}
+
 // Media Event Handlers
 const onTimeUpdate = (e) => {
     const player = e.target;
@@ -242,7 +255,7 @@ function playTrack(track) {
     activeGainNode = gainA;
     inactiveGainNode = gainB;
 
-    const secureUrl = 'app-media:///' + track.path.replace(/\\/g, '/');
+    const secureUrl = mediaUrlForPath(track.path);
     activePlayer.src = secureUrl;
     activePlayer.playbackRate = 1.0;
 
@@ -350,7 +363,7 @@ function startColdTransition(nextTrack) {
     const incomingGainMul = computeNormalizationGain(nextTrack);
 
     // Pre-cue the incoming track at its first downbeat, original speed, muted
-    incomingPlayer.src = 'app-media:///' + nextTrack.path.replace(/\\/g, '/');
+    incomingPlayer.src = mediaUrlForPath(nextTrack.path);
     incomingPlayer.playbackRate = 1.0;
     incomingPlayer.volume = 1.0; // signal level is controlled by the gain node
     incomingGainNode.gain.setTargetAtTime(0, audioCtx.currentTime, 0.01);
@@ -459,7 +472,7 @@ function startCrossfade(nextTrack) {
         type: 'system'
     });
 
-    const secureUrl = 'app-media:///' + nextTrack.path.replace(/\\/g, '/');
+    const secureUrl = mediaUrlForPath(nextTrack.path);
     inactivePlayer.src = secureUrl;
     inactivePlayer.playbackRate = clampedPlaybackRateIn;
     inactivePlayer.volume = 0;

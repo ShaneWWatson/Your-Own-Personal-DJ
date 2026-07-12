@@ -1,0 +1,60 @@
+# Builds the macOS version of Your Own Personal DJ on GitHub's macOS runners.
+#
+# Why CI instead of building locally: a .app bundle can only be assembled on a
+# macOS host (the bundle relies on symlinks and needs a codesign pass), and
+# node-llama-cpp's native Metal/x64 binaries are only installed when npm runs
+# on a machine matching the target platform.
+#
+# How to use: GitHub → Actions → "Build macOS app" → Run workflow, then
+# download the artifact for your Mac (arm64 = Apple Silicon, x64 = Intel).
+#
+# First launch on the Mac: the app is ad-hoc signed (not notarized), so
+# Gatekeeper will object. Right-click the app → Open, or run:
+#   xattr -dr com.apple.quarantine "Your Own Personal DJ.app"
+name: Build macOS app
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          # Runner arch must match the target arch so node-llama-cpp installs
+          # the right native binaries into node_modules before packaging.
+          - arch: arm64
+            runner: macos-latest # Apple Silicon
+          - arch: x64
+            runner: macos-13 # Intel
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Package the app
+        run: npx electron-packager . "Your Own Personal DJ" --platform=darwin --arch=${{ matrix.arch }} --out=dist/mac --overwrite --icon=icon.icns --asar.unpack="**/node_modules/{node-llama-cpp,@node-llama-cpp}/**"
+
+      - name: Ad-hoc code sign
+        # Apple Silicon refuses to run unsigned binaries at all; an ad-hoc
+        # signature (identity "-") is the minimum for the app to launch.
+        run: codesign --force --deep --sign - "dist/mac/Your Own Personal DJ-darwin-${{ matrix.arch }}/Your Own Personal DJ.app"
+
+      - name: Zip the app bundle
+        # ditto preserves the bundle's symlinks and resource forks; a plain
+        # zip (or the artifact uploader alone) would corrupt the .app.
+        run: ditto -c -k --sequesterRsrc --keepParent "dist/mac/Your Own Personal DJ-darwin-${{ matrix.arch }}/Your Own Personal DJ.app" "dist/mac/YourOwnPersonalDJ-mac-${{ matrix.arch }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YourOwnPersonalDJ-mac-${{ matrix.arch }}
+          path: dist/mac/YourOwnPersonalDJ-mac-${{ matrix.arch }}.zip

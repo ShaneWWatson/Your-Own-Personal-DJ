@@ -32,7 +32,7 @@ Your Own Personal DJ is a premium desktop audio player built on Electron and the
 Your Own Personal DJ is designed to keep your project files clean and adhere to operating system standards:
 
 - **Local Database (IndexedDB)**:
-  - **Location**: `C:\Users\<username>\AppData\Local\YourOwnPersonalDJ\` (or `%LOCALAPPDATA%\YourOwnPersonalDJ\`). The app stores its track database, scanned folders, and play history in IndexedDB inside this directory.
+  - **Location**: `%LOCALAPPDATA%\YourOwnPersonalDJ\` on Windows (i.e. `C:\Users\<username>\AppData\Local\YourOwnPersonalDJ\`), or `~/Library/Application Support/YourOwnPersonalDJ/` on macOS. The app stores its track database, scanned folders, and play history in IndexedDB inside this directory.
   - **Why**: Windows applications should store cached data and user databases in the user's local AppData directory rather than the application bundle. This prevents workspace pollution, aligns with standard Windows folder permissions, and ensures your database persists even when updating, deleting, or rebuilding the program code.
   - **Legacy `library.md`**: Older versions stored the library as a Markdown file at the same location. On first launch, the app automatically migrates it into IndexedDB and renames it to `library.md.migrated`.
 - **Integration & AI Settings**:
@@ -44,7 +44,7 @@ Your Own Personal DJ is designed to keep your project files clean and adhere to 
 - **ID3 Metadata Writing**:
   - For `.mp3` files, estimated BPM and Key tags are written directly back to the files' ID3 metadata tags (using standard ID3v2.3 headers) in the background so that they remain available to other media players.
 - **Debug Log (`debug.log`)**:
-  - **Location**: Same directory as the executable (the project folder during development).
+  - **Location**: Same directory as the executable on Windows (the project folder during development); the app-data directory above on macOS, where writing into the `.app` bundle would break its signature.
   - **What it records**: Everything shown in the in-app console window, plus raw technical error details behind the user-friendly messages, so issues can be decoded and troubleshot later. Rotates automatically at 5 MB (`debug.log.old`).
 
 ---
@@ -82,12 +82,22 @@ Your Own Personal DJ is designed to keep your project files clean and adhere to 
 
 ### Packaging & Compiling
 
-To bundle the application into a standalone Windows desktop executable (`Your Own Personal DJ.exe`):
+The Windows and macOS versions build from the same codebase and land in separate output folders (`dist/win/` and `dist/mac/`), so both can exist side by side.
+
+**Windows** — bundle a standalone desktop executable (`Your Own Personal DJ.exe`):
 
 ```bash
 npm run build
 ```
-The packaged product will be compiled under `dist/Your Own Personal DJ-win32-x64/`. You can copy or move this folder anywhere and launch the application directly from the executable.
+The packaged product will be compiled under `dist/win/Your Own Personal DJ-win32-x64/`. You can copy or move this folder anywhere and launch the application directly from the executable.
+
+**macOS** — a `.app` bundle can only be assembled on a macOS machine (bundle symlinks + code signing), so there are two routes:
+
+- *On a Mac*: `npm run build:mac` (Apple Silicon) or `npm run build:mac-intel` (Intel). Output lands under `dist/mac/Your Own Personal DJ-darwin-<arch>/`.
+- *Without a Mac*: run the **Build macOS app** workflow on GitHub (Actions tab → Build macOS app → Run workflow) — it packages the app on GitHub's macOS runners for both Apple Silicon and Intel and uploads each as a downloadable artifact.
+
+> [!NOTE]
+> The macOS build is ad-hoc signed, not notarized through an Apple Developer account. On first launch, right-click the app → **Open** (or run `xattr -dr com.apple.quarantine "Your Own Personal DJ.app"`), and macOS will remember the choice.
 
 ---
 
@@ -109,8 +119,10 @@ YourOwnPersonalDJ/
 ├── audio-analysis-worker.js    # Essentia.js worker: BPM, key, mood & beat-offset extraction
 ├── audio.html                  # Isolated audio playback engine window
 ├── audio-renderer.js           # Playback engine: normalization, crossfades, cold-ending handoffs
+├── icon.icns                   # macOS app icon (generated from icon.png)
+├── .github/workflows/          # CI: Dependabot + "Build macOS app" workflow
 ├── debug.log                   # (Auto-generated at runtime) Troubleshooting log, rotates at 5 MB
-└── dist/                       # (Auto-generated on build) Standalone packaged build
+└── dist/                       # (Auto-generated on build) Packaged builds: win/ and mac/
 ```
 
 ---

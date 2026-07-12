@@ -3461,13 +3461,31 @@ function stripId3v2(arrayBuffer) {
   return arrayBuffer;
 }
 
+// Windows is the only platform whose paths need canonicalizing (backslashes,
+// uppercase drive letter). POSIX paths (macOS/Linux) are already canonical
+// and must not be rewritten.
+const IS_WINDOWS = window.api.platform === 'win32';
+
 function normalizePath(filePath) {
   if (!filePath) return '';
+  if (!IS_WINDOWS) return filePath;
   let normalized = filePath.replace(/\//g, '\\');
   if (normalized.length >= 2 && normalized[1] === ':') {
     normalized = normalized[0].toUpperCase() + normalized.slice(1);
   }
   return normalized;
+}
+
+/**
+ * Build an app-media:// URL for an absolute file path on any platform.
+ * Windows:      C:\Music\a.mp3  → app-media:///C:/Music/a.mp3
+ * macOS/Linux:  /Users/me/a.mp3 → app-media:///Users/me/a.mp3
+ * @param {string} filePath - Absolute path of the media file.
+ * @returns {string}
+ */
+function mediaUrlForPath(filePath) {
+  const forward = filePath.replace(/\\/g, '/');
+  return 'app-media://' + (forward.startsWith('/') ? '' : '/') + forward;
 }
 
 /**
@@ -3519,7 +3537,7 @@ function sanitizeLibraryTrack(track) {
       }
 
       track[field] = cleaned || textDefaults[field] ||
-        (field === 'title' ? track.path.split('\\').pop().replace(/\.[^.]+$/, '') : '');
+        (field === 'title' ? track.path.split(/[\\/]/).pop().replace(/\.[^.]+$/, '') : '');
     }
   });
 
@@ -3592,7 +3610,7 @@ const MAX_ANALYSIS_FILE_BYTES = 100 * 1024 * 1024;
  * @throws {Error} When the file cannot be fetched or decoded.
  */
 async function decodeTrackToMono(trackPath) {
-  const secureUrl = 'app-media:///' + trackPath.replace(/\\/g, '/');
+  const secureUrl = mediaUrlForPath(trackPath);
   const response = await fetch(secureUrl);
   if (!response.ok) throw new Error(`Fetch failed with status ${response.status}`);
 
@@ -3632,7 +3650,7 @@ async function decodeTrackToMono(trackPath) {
  * @throws {Error} When the file cannot be fetched or decoded.
  */
 async function runTransientAnalysis(trackPath, knownBpm) {
-  const secureUrl = 'app-media:///' + trackPath.replace(/\\/g, '/');
+  const secureUrl = mediaUrlForPath(trackPath);
   const response = await fetch(secureUrl);
   if (!response.ok) throw new Error(`Fetch failed with status ${response.status}`);
   

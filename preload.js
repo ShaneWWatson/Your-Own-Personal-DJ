@@ -12,6 +12,10 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
+  // Platform string ('win32' | 'darwin' | 'linux') so the renderer can apply
+  // Windows-only path normalization without access to Node's process object.
+  platform: process.platform,
+
   selectFolder: () => ipcRenderer.invoke('select-folder'),
   startScan: (folders) => ipcRenderer.send('start-scan', folders),
   writeTags: (filePath, bpm, key, albumArtBase64) => ipcRenderer.invoke('write-tags', { filePath, bpm, key, albumArtBase64 }),

@@ -5,7 +5,10 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-packager . \"Your Own Personal DJ\" --platform=win32 --arch=x64 --out=dist --overwrite --asar.unpack=\"**/node_modules/{node-llama-cpp,@node-llama-cpp}/**\"",
+    "build": "npm run build:win",
+    "build:win": "electron-packager . \"Your Own Personal DJ\" --platform=win32 --arch=x64 --out=dist/win --overwrite --asar.unpack=\"**/node_modules/{node-llama-cpp,@node-llama-cpp}/**\"",
+    "build:mac": "electron-packager . \"Your Own Personal DJ\" --platform=darwin --arch=arm64 --out=dist/mac --overwrite --icon=icon.icns --asar.unpack=\"**/node_modules/{node-llama-cpp,@node-llama-cpp}/**\"",
+    "build:mac-intel": "electron-packager . \"Your Own Personal DJ\" --platform=darwin --arch=x64 --out=dist/mac --overwrite --icon=icon.icns --asar.unpack=\"**/node_modules/{node-llama-cpp,@node-llama-cpp}/**\"",
     "lint": "eslint main.js preload.js renderer.js audio-renderer.js audio-analysis-worker.js"
   },
   "dependencies": {

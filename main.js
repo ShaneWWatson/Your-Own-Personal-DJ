@@ -43,8 +43,13 @@ protocol.registerSchemesAsPrivileged([
   }
 ]);
 
-// Configure custom userData path to store IndexedDB in AppData\Local\YourOwnPersonalDJ\
-const dbDir = process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'YourOwnPersonalDJ') : path.join(app.getPath('userData'), 'YourOwnPersonalDJ');
+// Configure custom userData path so IndexedDB/configs live in a predictable
+// per-user data folder: %LOCALAPPDATA%\YourOwnPersonalDJ on Windows,
+// ~/Library/Application Support/YourOwnPersonalDJ on macOS (appData maps to
+// the platform's application-data root).
+const dbDir = process.env.LOCALAPPDATA
+  ? path.join(process.env.LOCALAPPDATA, 'YourOwnPersonalDJ')
+  : path.join(app.getPath('appData'), 'YourOwnPersonalDJ');
 if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
 }
@@ -54,7 +59,12 @@ const libraryCachePath = path.join(dbDir, 'library.md');
 // --- debug.log: persistent troubleshooting log next to the executable ---
 // Records everything shown in the in-app console window plus raw technical
 // error details, so problems can be decoded and troubleshot later.
-const debugLogDir = app.isPackaged ? path.dirname(process.execPath) : __dirname;
+// Windows: next to the executable, as documented. macOS/Linux: inside the
+// app-data folder — writing into a packaged .app bundle would break its
+// code signature (and may simply fail).
+const debugLogDir = app.isPackaged
+  ? (process.platform === 'win32' ? path.dirname(process.execPath) : dbDir)
+  : __dirname;
 const debugLogPath = path.join(debugLogDir, 'debug.log');
 let debugLogDisabled = false;
 
