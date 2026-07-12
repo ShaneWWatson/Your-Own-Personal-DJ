@@ -5,9 +5,10 @@ node_modules/
 dist/
 out/
 
-# App debug output
+# App debug output (including rotated copies and .bak backups)
 debug.log
 debug.log.old
+*.bak
 
 # Log files
 npm-debug.log*

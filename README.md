@@ -37,6 +37,7 @@ Your Own Personal DJ is designed to keep your project files clean and adhere to 
   - **Legacy `library.md`**: Older versions stored the library as a Markdown file at the same location. On first launch, the app automatically migrates it into IndexedDB and renames it to `library.md.migrated`.
 - **Integration & AI Settings**:
   - Configuration for the optional features lives as small JSON files in the same app-data directory: `ai-config.json` (Lyric Mood AI provider/model and, if used, your Anthropic API key), `discord-config.json`, and `lastfm-config.json`. If you enable the local Lyric Mood AI, its language model is stored once in a `models/` subfolder. These files stay on your machine and are never uploaded.
+  - Secret values inside those files (API keys, OAuth tokens, shared secrets) are encrypted at rest with Electron `safeStorage` (Windows DPAPI). Configs saved by older versions are re-encrypted automatically on the next launch.
   - The main-screen Lyric Mood AI on/off preference is remembered in the renderer's local storage, so it persists across sessions independently of the analysis database.
 - **Media Files**:
   - **Location**: Your music files stay exactly where they are on your system. The app uses a secure custom Electron streaming protocol (`app-media://`) to stream audio directly from your local folders without copying, duplicating, or uploading them anywhere.
@@ -120,7 +121,7 @@ YourOwnPersonalDJ/
   ```bash
   npm run lint
   ```
-- **Security posture**: Renderer windows run with `contextIsolation`, `sandbox`, and `nodeIntegration: false`. All renderer↔main communication crosses an explicitly-enumerated `contextBridge` API. Windows cannot open popups or navigate away from app pages. Custom-protocol file access is restricted by an audio-extension allowlist outside the app directory.
+- **Security posture**: Renderer windows run with `contextIsolation`, `sandbox`, and `nodeIntegration: false`. All renderer↔main communication crosses an explicitly-enumerated `contextBridge` API. Windows cannot open popups or navigate away from app pages. Custom-protocol file access is restricted by an audio-extension allowlist outside the app directory. Integration secrets are encrypted at rest via `safeStorage`, and the Discord/Last.fm authorization callback servers bind to `127.0.0.1` only, carry a per-attempt `state` token, and shut down automatically if the flow is abandoned.
 - **Documentation style**: Source files carry `@file` headers with license notices; significant functions are documented with JSDoc (`@param`/`@returns`).
 
 ---

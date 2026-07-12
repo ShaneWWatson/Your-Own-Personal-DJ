@@ -1099,9 +1099,17 @@ function isAlbumArtValid(art) {
   }
 }
 
+// Genre labels that describe non-music content. Podcast/audiobook tools stamp
+// these onto plain music files often enough that they carry no signal for the
+// DJ engine — treat them as Unknown so classification falls back to the audio.
+// (Kept in sync with the copy in main.js.)
+const NON_MUSIC_GENRES = ['podcast', 'audiobook', 'audio book', 'speech', 'spoken word', 'spoken'];
+
 /**
  * Reduce multi-genre tag dumps ("Rock;Pop;Dance/Electronic;...") to the first
- * listed genre and cap runaway lengths. Returns 'Unknown' for blank values.
+ * listed genre, discard unusable labels (raw ID3v1 numeric codes, non-music
+ * categories), and cap runaway lengths. Returns 'Unknown' for anything
+ * without signal. (Kept in sync with the copy in main.js.)
  */
 function cleanGenre(val) {
   if (val === null || val === undefined) return 'Unknown';
@@ -1110,6 +1118,10 @@ function cleanGenre(val) {
 
   const first = g.split(/[;,|/•·]+/)[0].trim();
   if (first) g = first;
+  // Raw ID3v1 genre indexes ("186", "(17)") that reached us untranslated say
+  // nothing useful — let the audio analysis classify the track instead.
+  if (/^\(?\d{1,3}\)?$/.test(g)) return 'Unknown';
+  if (NON_MUSIC_GENRES.includes(g.toLowerCase())) return 'Unknown';
   if (g.length > 48) g = g.slice(0, 48).trim();
 
   return g || 'Unknown';
@@ -3496,22 +3508,11 @@ function sanitizeLibraryTrack(track) {
     if (track[field] !== undefined) {
       let cleaned = String(track[field] ?? '').replace(/\0/g, '').trim();
 
-      // Specific fix for mis-tagged "Podcast" genre (e.g. Sea Wolf)
-      if (field === 'genre' && (cleaned.toLowerCase() === 'podcast' || cleaned === '186')) {
-        if (track.artist && track.artist.toLowerCase().includes('sea wolf')) {
-          cleaned = 'Indie Rock';
-        } else {
-          cleaned = 'Unknown';
-        }
-      }
-
-      // Fix for "Carbine (Escape Mix)" - ensuring it's seen as Industrial/Electronic, not Metal
-      if (field === 'genre' && track.title && track.title.toLowerCase().includes('carbine')) {
-        cleaned = 'Industrial Electronic';
-      }
-
-      // Collapse multi-genre tag dumps ("Rock;Pop;Dance/Electronic;...") to the
-      // first listed genre and cap runaway lengths (some files carry 128+ chars)
+      // Normalise the genre through the shared rules: collapse multi-genre tag
+      // dumps to the first listed genre, discard raw numeric codes and
+      // non-music labels (podcast/audiobook/etc.), and cap runaway lengths.
+      // Tracks whose genre carries no signal fall back to audio analysis and
+      // the Sonic Profile keyword/artist matching for classification.
       if (field === 'genre' && cleaned) {
         const g = cleanGenre(cleaned);
         cleaned = (g === 'Unknown') ? '' : g;

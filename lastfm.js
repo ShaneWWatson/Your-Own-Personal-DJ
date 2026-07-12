@@ -11,6 +11,7 @@
 
 const crypto = require('crypto');
 const { URLSearchParams } = require('url');
+const { version: APP_VERSION } = require('./package.json');
 
 const LASTFM_API_URL = 'https://ws.audioscrobbler.com/2.0/';
 
@@ -45,7 +46,7 @@ async function apiCall(params, secret) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
-      'User-Agent': 'YourOwnPersonalDJ/2.2.0'
+      'User-Agent': `YourOwnPersonalDJ/${APP_VERSION}`
     },
     body
   });

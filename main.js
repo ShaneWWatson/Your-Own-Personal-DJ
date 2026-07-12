@@ -15,9 +15,10 @@
  */
 /* global fetch */
 
-const { app, BrowserWindow, ipcMain, dialog, protocol, session } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, session, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const url = require('url');
 const musicMetadata = require('music-metadata');
 const NodeID3 = require('node-id3');
@@ -84,6 +85,55 @@ ipcMain.on('debug-log', (event, line) => {
   if (typeof line === 'string') writeDebugLog(line);
 });
 
+/**
+ * Escape a string for safe interpolation into HTML served by the local OAuth
+ * callback pages (values like error params and usernames come from outside).
+ * @param {*} str - Any value; null/undefined become an empty string.
+ * @returns {string} HTML-safe text.
+ */
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+// --- Secret storage (encryption at rest) -------------------------------------
+// Secret fields in the JSON config files (API keys, OAuth tokens, shared
+// secrets) are encrypted with Electron safeStorage — DPAPI on Windows — so
+// they are not readable as plaintext on disk. Values written before this
+// existed load fine (no prefix = legacy plaintext) and are re-encrypted on
+// the next save. If OS-level encryption is unavailable, values fall back to
+// plaintext rather than breaking the integrations.
+const SECRET_PREFIX = 'encv1:';
+
+function protectSecret(value) {
+  if (!value) return '';
+  try {
+    if (safeStorage.isEncryptionAvailable()) {
+      return SECRET_PREFIX + safeStorage.encryptString(value).toString('base64');
+    }
+  } catch (err) {
+    writeDebugLog(`[secret-store] encryption unavailable, storing plaintext: ${err.message}`);
+  }
+  return value;
+}
+
+function revealSecret(value) {
+  if (!value || typeof value !== 'string') return '';
+  if (!value.startsWith(SECRET_PREFIX)) return value; // legacy plaintext config
+  try {
+    return safeStorage.decryptString(Buffer.from(value.slice(SECRET_PREFIX.length), 'base64'));
+  } catch (err) {
+    // Wrong user profile / corrupted blob — treat as unset so the user can re-enter it
+    writeDebugLog(`[secret-store] decryption failed, secret reset: ${err.message}`);
+    return '';
+  }
+}
+
 // --- Lyric Mood AI ----------------------------------------------------------
 // Judges whether a song's embedded lyrics fit the listener's requested mood.
 // Two providers:
@@ -99,7 +149,9 @@ ipcMain.on('debug-log', (event, line) => {
 const AI_CONFIG_PATH = path.join(dbDir, 'ai-config.json');
 const AI_MODELS_DIR = path.join(dbDir, 'models');
 const AI_ALLOWED_MODELS = ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5'];
-const AI_DEFAULT_MODEL = 'claude-opus-4-8';
+// Haiku is the default: lyric-fit judgment is a simple yes/no classification,
+// and Haiku handles it well at a fraction of the Opus/Sonnet price.
+const AI_DEFAULT_MODEL = 'claude-haiku-4-5';
 const AI_PROVIDERS = ['local', 'anthropic'];
 const AI_MAX_TRACKS_PER_RUN = 200;  // hard cap per analyze invocation
 
@@ -114,20 +166,34 @@ const AI_LOCAL_MODEL_URI = 'hf:Qwen/Qwen2.5-1.5B-Instruct-GGUF:Q4_K_M';
 const AI_LOCAL_MODEL_FILE_HINT = /qwen2\.5-1\.5b-instruct.*\.gguf$/i;
 
 let aiConfig = { provider: 'local', apiKey: '', model: AI_DEFAULT_MODEL };
-try {
-  const raw = JSON.parse(fs.readFileSync(AI_CONFIG_PATH, 'utf8'));
-  if (raw && typeof raw.apiKey === 'string') aiConfig.apiKey = raw.apiKey;
-  if (raw && AI_ALLOWED_MODELS.includes(raw.model)) aiConfig.model = raw.model;
-  if (raw && AI_PROVIDERS.includes(raw.provider)) aiConfig.provider = raw.provider;
-  else if (raw && raw.apiKey) aiConfig.provider = 'anthropic'; // pre-provider config files
-} catch { /* no config yet — defaults stand */ }
-// Environment variable wins if set (handy for development)
-if (process.env.ANTHROPIC_API_KEY) aiConfig.apiKey = process.env.ANTHROPIC_API_KEY;
+
+// ANTHROPIC_API_KEY from the environment is used as a runtime fallback only
+// (handy for development). It is deliberately kept out of aiConfig so a
+// Settings save can never persist the dev key into ai-config.json.
+const ENV_ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || '';
+
+function getAiApiKey() {
+  return aiConfig.apiKey || ENV_ANTHROPIC_KEY;
+}
+
+function loadAiConfig() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(AI_CONFIG_PATH, 'utf8'));
+    if (raw && typeof raw.apiKey === 'string') aiConfig.apiKey = revealSecret(raw.apiKey);
+    if (raw && AI_ALLOWED_MODELS.includes(raw.model)) aiConfig.model = raw.model;
+    if (raw && AI_PROVIDERS.includes(raw.provider)) aiConfig.provider = raw.provider;
+    else if (raw && raw.apiKey) aiConfig.provider = 'anthropic'; // pre-provider config files
+    // Upgrade legacy plaintext keys to encrypted storage in place
+    if (raw && typeof raw.apiKey === 'string' && raw.apiKey && !raw.apiKey.startsWith(SECRET_PREFIX)) {
+      saveAiConfig();
+    }
+  } catch { /* no config yet — defaults stand */ }
+}
 
 function saveAiConfig() {
   fs.writeFileSync(AI_CONFIG_PATH, JSON.stringify({
     provider: aiConfig.provider,
-    apiKey: aiConfig.apiKey,
+    apiKey: protectSecret(aiConfig.apiKey),
     model: aiConfig.model,
   }), 'utf8');
 }
@@ -145,26 +211,38 @@ let discordConfig = {
   username: ''
 };
 
-try {
-  if (fs.existsSync(DISCORD_CONFIG_PATH)) {
-    const raw = JSON.parse(fs.readFileSync(DISCORD_CONFIG_PATH, 'utf8'));
-    if (raw) {
-      if (typeof raw.enabled === 'boolean') discordConfig.enabled = raw.enabled;
-      if (typeof raw.clientId === 'string') discordConfig.clientId = raw.clientId;
-      if (typeof raw.clientSecret === 'string') discordConfig.clientSecret = raw.clientSecret;
-      if (typeof raw.accessToken === 'string') discordConfig.accessToken = raw.accessToken;
-      if (typeof raw.refreshToken === 'string') discordConfig.refreshToken = raw.refreshToken;
-      if (typeof raw.expiresAt === 'number') discordConfig.expiresAt = raw.expiresAt;
-      if (typeof raw.username === 'string') discordConfig.username = raw.username;
+function loadDiscordConfig() {
+  try {
+    if (fs.existsSync(DISCORD_CONFIG_PATH)) {
+      const raw = JSON.parse(fs.readFileSync(DISCORD_CONFIG_PATH, 'utf8'));
+      if (raw) {
+        if (typeof raw.enabled === 'boolean') discordConfig.enabled = raw.enabled;
+        if (typeof raw.clientId === 'string') discordConfig.clientId = raw.clientId;
+        if (typeof raw.clientSecret === 'string') discordConfig.clientSecret = revealSecret(raw.clientSecret);
+        if (typeof raw.accessToken === 'string') discordConfig.accessToken = revealSecret(raw.accessToken);
+        if (typeof raw.refreshToken === 'string') discordConfig.refreshToken = revealSecret(raw.refreshToken);
+        if (typeof raw.expiresAt === 'number') discordConfig.expiresAt = raw.expiresAt;
+        if (typeof raw.username === 'string') discordConfig.username = raw.username;
+        // Upgrade legacy plaintext secrets to encrypted storage in place
+        const secrets = [raw.clientSecret, raw.accessToken, raw.refreshToken];
+        if (secrets.some(s => typeof s === 'string' && s && !s.startsWith(SECRET_PREFIX))) {
+          saveDiscordConfig();
+        }
+      }
     }
+  } catch (err) {
+    writeDebugLog(`[discord-config-load-error] ${err.message}`);
   }
-} catch (err) {
-  writeDebugLog(`[discord-config-load-error] ${err.message}`);
 }
 
 function saveDiscordConfig() {
   try {
-    fs.writeFileSync(DISCORD_CONFIG_PATH, JSON.stringify(discordConfig, null, 2), 'utf8');
+    fs.writeFileSync(DISCORD_CONFIG_PATH, JSON.stringify({
+      ...discordConfig,
+      clientSecret: protectSecret(discordConfig.clientSecret),
+      accessToken: protectSecret(discordConfig.accessToken),
+      refreshToken: protectSecret(discordConfig.refreshToken),
+    }, null, 2), 'utf8');
   } catch (err) {
     writeDebugLog(`[discord-config-save-error] ${err.message}`);
   }
@@ -323,24 +401,35 @@ let lastfmConfig = {
   username: ''
 };
 
-try {
-  if (fs.existsSync(LASTFM_CONFIG_PATH)) {
-    const raw = JSON.parse(fs.readFileSync(LASTFM_CONFIG_PATH, 'utf8'));
-    if (raw) {
-      if (typeof raw.enabled === 'boolean') lastfmConfig.enabled = raw.enabled;
-      if (typeof raw.apiKey === 'string') lastfmConfig.apiKey = raw.apiKey;
-      if (typeof raw.apiSecret === 'string') lastfmConfig.apiSecret = raw.apiSecret;
-      if (typeof raw.sessionKey === 'string') lastfmConfig.sessionKey = raw.sessionKey;
-      if (typeof raw.username === 'string') lastfmConfig.username = raw.username;
+function loadLastfmConfig() {
+  try {
+    if (fs.existsSync(LASTFM_CONFIG_PATH)) {
+      const raw = JSON.parse(fs.readFileSync(LASTFM_CONFIG_PATH, 'utf8'));
+      if (raw) {
+        if (typeof raw.enabled === 'boolean') lastfmConfig.enabled = raw.enabled;
+        if (typeof raw.apiKey === 'string') lastfmConfig.apiKey = raw.apiKey;
+        if (typeof raw.apiSecret === 'string') lastfmConfig.apiSecret = revealSecret(raw.apiSecret);
+        if (typeof raw.sessionKey === 'string') lastfmConfig.sessionKey = revealSecret(raw.sessionKey);
+        if (typeof raw.username === 'string') lastfmConfig.username = raw.username;
+        // Upgrade legacy plaintext secrets to encrypted storage in place
+        const secrets = [raw.apiSecret, raw.sessionKey];
+        if (secrets.some(s => typeof s === 'string' && s && !s.startsWith(SECRET_PREFIX))) {
+          saveLastfmConfig();
+        }
+      }
     }
+  } catch (err) {
+    writeDebugLog(`[lastfm-config-load-error] ${err.message}`);
   }
-} catch (err) {
-  writeDebugLog(`[lastfm-config-load-error] ${err.message}`);
 }
 
 function saveLastfmConfig() {
   try {
-    fs.writeFileSync(LASTFM_CONFIG_PATH, JSON.stringify(lastfmConfig, null, 2), 'utf8');
+    fs.writeFileSync(LASTFM_CONFIG_PATH, JSON.stringify({
+      ...lastfmConfig,
+      apiSecret: protectSecret(lastfmConfig.apiSecret),
+      sessionKey: protectSecret(lastfmConfig.sessionKey),
+    }, null, 2), 'utf8');
   } catch (err) {
     writeDebugLog(`[lastfm-config-save-error] ${err.message}`);
   }
@@ -426,8 +515,9 @@ function handleAudioEventForLastfm(data) {
 
 let anthropicClient = null;
 function getAnthropicClient() {
-  if (!aiConfig.apiKey) return null;
-  if (!anthropicClient) anthropicClient = new Anthropic({ apiKey: aiConfig.apiKey });
+  const apiKey = getAiApiKey();
+  if (!apiKey) return null;
+  if (!anthropicClient) anthropicClient = new Anthropic({ apiKey });
   return anthropicClient;
 }
 
@@ -614,7 +704,7 @@ function aiStatusSnapshot() {
     model: aiConfig.model,
     localModelReady,
     downloading: localModelDownloading,
-    configured: aiConfig.provider === 'local' ? localModelReady : Boolean(aiConfig.apiKey),
+    configured: aiConfig.provider === 'local' ? localModelReady : Boolean(getAiApiKey()),
   };
 }
 
@@ -791,6 +881,13 @@ app.on('web-contents-created', (event, contents) => {
 
 // Register custom protocol for local media streaming
 app.whenReady().then(() => {
+  // Config files hold encrypted secrets; safeStorage needs the app to be
+  // ready before it can decrypt them, so loading happens here rather than
+  // at module load time.
+  loadAiConfig();
+  loadDiscordConfig();
+  loadLastfmConfig();
+
   // MusicBrainz / Cover Art Archive require a descriptive User-Agent and will
   // reject generic ones. We MUST set it at the network layer rather than as a
   // fetch() header in the renderer: User-Agent is not a CORS-safelisted request
@@ -890,8 +987,10 @@ app.whenReady().then(() => {
       // Files inside the app directory (like index.html, renderer.js, audio-analysis-worker.js, etc.) are allowed.
       // Files outside the app directory are strictly limited to valid audio extensions.
       const normalizedFilePath = path.normalize(filePath).toLowerCase();
-      const normalizedAppDir = path.normalize(__dirname).toLowerCase();
-      
+      // Trailing separator so sibling directories that merely share the app
+      // dir's name as a prefix (e.g. "...-DJ-copy") don't pass as "inside".
+      const normalizedAppDir = path.normalize(__dirname).toLowerCase() + path.sep;
+
       if (!normalizedFilePath.startsWith(normalizedAppDir)) {
         const ext = path.extname(filePath).toLowerCase();
         const allowedAudioExts = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.wma'];
@@ -1111,14 +1210,26 @@ function sanitizeText(val, fallback = '') {
   return cleaned || fallback;
 }
 
+// Genre labels that describe non-music content. Podcast/audiobook tools stamp
+// these onto plain music files often enough that they carry no signal for the
+// DJ engine — treat them as Unknown so classification falls back to the audio.
+// (Kept in sync with the copy in renderer.js.)
+const NON_MUSIC_GENRES = ['podcast', 'audiobook', 'audio book', 'speech', 'spoken word', 'spoken'];
+
 // Reduce multi-genre tag dumps ("Rock;Pop;Dance/Electronic;...") — some files
 // carry 128+ characters spanning many genres — down to the first listed genre,
-// and cap runaway lengths. Returns 'Unknown' for blank values.
+// discard unusable labels (raw ID3v1 numeric codes, non-music categories), and
+// cap runaway lengths. Returns 'Unknown' for anything without signal.
+// (Kept in sync with the copy in renderer.js.)
 function cleanGenre(val) {
   let g = sanitizeText(val, '');
   if (!g) return 'Unknown';
   const first = g.split(/[;,|/•·]+/)[0].trim();
   if (first) g = first;
+  // Raw ID3v1 genre indexes ("186", "(17)") that reached us untranslated say
+  // nothing useful — let the audio analysis classify the track instead.
+  if (/^\(?\d{1,3}\)?$/.test(g)) return 'Unknown';
+  if (NON_MUSIC_GENRES.includes(g.toLowerCase())) return 'Unknown';
   if (g.length > 48) g = g.slice(0, 48).trim();
   return g || 'Unknown';
 }
@@ -1883,9 +1994,16 @@ ipcMain.handle('discord-authorize', async (event, config) => {
 
   return new Promise((resolve) => {
     const PORT = 50124;
+    // Random state ties the browser callback to this specific request (CSRF guard)
+    const oauthState = crypto.randomUUID();
     let server;
+    let timeoutId = null;
 
     const cleanupServer = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
       if (server) {
         server.close();
         server = null;
@@ -1895,14 +2013,22 @@ ipcMain.handle('discord-authorize', async (event, config) => {
     server = http.createServer(async (req, res) => {
       try {
         const reqUrl = new URL(req.url, `http://${req.headers.host}`);
-        
+
         if (reqUrl.pathname === '/callback') {
           const code = reqUrl.searchParams.get('code');
           const error = reqUrl.searchParams.get('error');
 
+          if (reqUrl.searchParams.get('state') !== oauthState) {
+            res.writeHead(400, { 'Content-Type': 'text/html' });
+            res.end('<h1>Authentication Failed</h1><p>The authorization response did not match this session. Please retry from the app.</p>');
+            cleanupServer();
+            resolve({ ok: false, error: 'OAuth state mismatch' });
+            return;
+          }
+
           if (error) {
             res.writeHead(400, { 'Content-Type': 'text/html' });
-            res.end('<h1>Authentication Failed</h1><p>Error: ' + error + '</p>');
+            res.end('<h1>Authentication Failed</h1><p>Error: ' + escapeHtml(error) + '</p>');
             cleanupServer();
             resolve({ ok: false, error: error });
             return;
@@ -1981,7 +2107,7 @@ ipcMain.handle('discord-authorize', async (event, config) => {
         }
       } catch (err) {
         res.writeHead(500, { 'Content-Type': 'text/html' });
-        res.end('<h1>Authentication Error</h1><p>' + err.message + '</p>');
+        res.end('<h1>Authentication Error</h1><p>' + escapeHtml(err.message) + '</p>');
         cleanupServer();
         resolve({ ok: false, error: err.message });
       }
@@ -1989,17 +2115,26 @@ ipcMain.handle('discord-authorize', async (event, config) => {
 
     server.on('error', (err) => {
       writeDebugLog(`[discord-oauth-server-error] ${err.message}`);
+      cleanupServer();
       resolve({ ok: false, error: `Failed to start redirect server on port ${PORT}: ${err.message}` });
     });
 
-    server.listen(PORT, () => {
-      writeDebugLog(`[discord] OAuth callback server listening on port ${PORT}`);
+    // Loopback only — the callback must never be reachable from the LAN
+    server.listen(PORT, '127.0.0.1', () => {
+      writeDebugLog(`[discord] OAuth callback server listening on 127.0.0.1:${PORT}`);
       // Open browser for authentication
       const scopes = encodeURIComponent('identify rpc rpc.activities.write');
       const redirectUri = encodeURIComponent(`http://localhost:${PORT}/callback`);
-      const authUrl = `https://discord.com/api/oauth2/authorize?client_id=${discordConfig.clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scopes}`;
-      
+      const authUrl = `https://discord.com/api/oauth2/authorize?client_id=${discordConfig.clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scopes}&state=${oauthState}`;
+
       require('electron').shell.openExternal(authUrl);
+
+      // An abandoned flow must not leave the port listening forever
+      timeoutId = setTimeout(() => {
+        writeDebugLog('[discord] OAuth flow timed out (no callback within 5 minutes)');
+        cleanupServer();
+        resolve({ ok: false, error: 'Authorization timed out — please try again.' });
+      }, 5 * 60 * 1000);
     });
   });
 });
@@ -2054,9 +2189,17 @@ ipcMain.handle('lastfm-authorize', async (event, config) => {
 
   return new Promise((resolve) => {
     const PORT = 50125;
+    // Last.fm has no state parameter of its own, so the state rides on the
+    // callback URL we hand it and must come back unchanged (CSRF guard).
+    const oauthState = crypto.randomUUID();
     let server;
+    let timeoutId = null;
 
     const cleanupServer = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
       if (server) { server.close(); server = null; }
     };
 
@@ -2068,9 +2211,17 @@ ipcMain.handle('lastfm-authorize', async (event, config) => {
           const token = reqUrl.searchParams.get('token');
           const error = reqUrl.searchParams.get('error');
 
+          if (reqUrl.searchParams.get('state') !== oauthState) {
+            res.writeHead(400, { 'Content-Type': 'text/html' });
+            res.end('<h1>Authentication Failed</h1><p>The authorization response did not match this session. Please retry from the app.</p>');
+            cleanupServer();
+            resolve({ ok: false, error: 'Auth state mismatch' });
+            return;
+          }
+
           if (error || !token) {
             res.writeHead(400, { 'Content-Type': 'text/html' });
-            res.end('<h1>Authentication Failed</h1><p>Error: ' + (error || 'Missing token') + '</p>');
+            res.end('<h1>Authentication Failed</h1><p>Error: ' + escapeHtml(error || 'Missing token') + '</p>');
             cleanupServer();
             resolve({ ok: false, error: error || 'Missing token' });
             return;
@@ -2092,7 +2243,7 @@ ipcMain.handle('lastfm-authorize', async (event, config) => {
             <html>
               <body style="font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #0f172a; color: white;">
                 <h1 style="color: #e23b3b;">&#9835; Last.fm Connected!</h1>
-                <p>Scrobbling is now active for <strong>${lastfmConfig.username}</strong>. You can close this window.</p>
+                <p>Scrobbling is now active for <strong>${escapeHtml(lastfmConfig.username)}</strong>. You can close this window.</p>
               </body>
             </html>
           `);
@@ -2104,7 +2255,7 @@ ipcMain.handle('lastfm-authorize', async (event, config) => {
         }
       } catch (err) {
         res.writeHead(500, { 'Content-Type': 'text/html' });
-        res.end('<h1>Error</h1><p>' + err.message + '</p>');
+        res.end('<h1>Error</h1><p>' + escapeHtml(err.message) + '</p>');
         cleanupServer();
         resolve({ ok: false, error: err.message });
       }
@@ -2112,14 +2263,23 @@ ipcMain.handle('lastfm-authorize', async (event, config) => {
 
     server.on('error', (err) => {
       writeDebugLog(`[lastfm-auth-server-error] ${err.message}`);
+      cleanupServer();
       resolve({ ok: false, error: `Failed to start redirect server on port ${PORT}: ${err.message}` });
     });
 
-    server.listen(PORT, () => {
-      writeDebugLog(`[lastfm] OAuth callback server listening on port ${PORT}`);
-      const callbackUrl = encodeURIComponent(`http://localhost:${PORT}/callback`);
+    // Loopback only — the callback must never be reachable from the LAN
+    server.listen(PORT, '127.0.0.1', () => {
+      writeDebugLog(`[lastfm] OAuth callback server listening on 127.0.0.1:${PORT}`);
+      const callbackUrl = encodeURIComponent(`http://localhost:${PORT}/callback?state=${oauthState}`);
       const authUrl = `https://www.last.fm/api/auth/?api_key=${lastfmConfig.apiKey}&cb=${callbackUrl}`;
       require('electron').shell.openExternal(authUrl);
+
+      // An abandoned flow must not leave the port listening forever
+      timeoutId = setTimeout(() => {
+        writeDebugLog('[lastfm] auth flow timed out (no callback within 5 minutes)');
+        cleanupServer();
+        resolve({ ok: false, error: 'Authorization timed out — please try again.' });
+      }, 5 * 60 * 1000);
     });
   });
 });
